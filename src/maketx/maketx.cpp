@@ -185,21 +185,12 @@ getargs(int argc, char* argv[], ImageSpec& configspec)
     bool cdf                   = false;
     float cdfsigma             = 1.0f / 6;
     int cdfbits                = 8;
-<<<<<<< HEAD
-#if OIIOTOOL_METADATA_HISTORY_DEFAULT
-    bool metadata_history = Strutil::from_string<int>(
-        getenv("OIIOTOOL_METADATA_HISTORY", "1"));
-#else
-    bool metadata_history = Strutil::from_string<int>(
-        getenv("OIIOTOOL_METADATA_HISTORY"));
-=======
 #if OPENIMAGEIO_METADATA_HISTORY_DEFAULT
     bool metadata_history = Strutil::from_string<int>(
         getenv("OPENIMAGEIO_METADATA_HISTORY", "1"));
 #else
     bool metadata_history = Strutil::from_string<int>(
         getenv("OPENIMAGEIO_METADATA_HISTORY"));
->>>>>>> f6c7e4fafb9acacbc12dfb26908cb3a5c834795c
 #endif
     std::string incolorspace;
     std::string outcolorspace;

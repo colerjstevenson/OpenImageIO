@@ -67,15 +67,12 @@ OIIO_PRAGMA_WARNING_PUSH
 #if OIIO_CLANG_VERSION >= 180000
 #    pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #endif
-<<<<<<< HEAD
-=======
 #if OIIO_CLANG_VERSION || OIIO_APPLE_CLANG_VERSION
 #    pragma clang diagnostic ignored "-Winvalid-noreturn"
 #endif
 // #if OIIO_GNUC_VERSION
 // #    pragma gcc diagnostic ignored "-Winvalid-noreturn"
 // #endif
->>>>>>> f6c7e4fafb9acacbc12dfb26908cb3a5c834795c
 
 #include <OpenImageIO/detail/fmt/format.h>
 #include <OpenImageIO/detail/fmt/ostream.h>
