@@ -19,8 +19,8 @@ endif ()
 # Python cannot be found, it will be a fatal error.
 macro (find_python)
     if (NOT VERBOSE)
-        set (PythonInterp_FIND_QUIETLY true)
-        set (PythonLibs_FIND_QUIETLY true)
+        set (PythonInterp3_FIND_QUIETLY true)
+        set (PythonLibs3_FIND_QUIETLY true)
     endif ()
 
     # Attempt to find the desired version, but fall back to other
@@ -32,22 +32,23 @@ macro (find_python)
             list (APPEND _req EXACT)
         endif ()
     endif ()
-    checked_find_package (Python ${PYTHON_VERSION}
+    checked_find_package (Python3 ${PYTHON_VERSION}
                           ${_req}
+                          VERSION_MIN 3.7
                           COMPONENTS Interpreter Development
-                          PRINT Python_VERSION Python_EXECUTABLE
-                                Python_LIBRARIES
-                                Python_Development_FOUND
-                                Python_Interpreter_FOUND )
+                          PRINT Python3_VERSION Python3_EXECUTABLE
+                                Python3_LIBRARIES
+                                Python3_Development_FOUND
+                                Python3_Interpreter_FOUND )
 
     # The version that was found may not be the default or user
     # defined one.
-    set (PYTHON_VERSION_FOUND ${Python_VERSION_MAJOR}.${Python_VERSION_MINOR})
+    set (PYTHON_VERSION_FOUND ${Python3_VERSION_MAJOR}.${Python3_VERSION_MINOR})
 
     # Give hints to subsequent pybind11 searching to ensure that it finds
     # exactly the same version that we found.
-    set (PythonInterp_FIND_VERSION PYTHON_VERSION_FOUND)
-    set (PythonInterp_FIND_VERSION_MAJOR ${Python_VERSION_MAJOR})
+    set (PythonInterp3_FIND_VERSION PYTHON_VERSION_FOUND)
+    set (PythonInterp3_FIND_VERSION_MAJOR ${Python3_VERSION_MAJOR})
 
     if (NOT DEFINED PYTHON_SITE_DIR)
         set (PYTHON_SITE_DIR "${CMAKE_INSTALL_LIBDIR}/python${PYTHON_VERSION_FOUND}/site-packages/OpenImageIO")
@@ -62,7 +63,7 @@ endmacro()
 # pybind11
 
 macro (setup_python_module)
-    cmake_parse_arguments (lib "" "TARGET;MODULE" "SOURCES;LIBS" ${ARGN})
+    cmake_parse_arguments (lib "" "TARGET;MODULE" "SOURCES;LIBS;INCLUDES;SYSTEM_INCLUDE_DIRS" ${ARGN})
     # Arguments: <prefix> <options> <one_value_keywords> <multi_value_keywords> args...
 
     set (target_name ${lib_TARGET})
@@ -78,6 +79,10 @@ macro (setup_python_module)
 #    add_library (${target_name} MODULE ${lib_SOURCES})
 #
     # Declare the libraries it should link against
+    target_include_directories (${target_name}
+                                PRIVATE ${lib_INCLUDES})
+    target_include_directories (${target_name}
+                                SYSTEM PRIVATE ${lib_SYSTEM_INCLUDE_DIRS})
     target_link_libraries (${target_name}
                            PRIVATE ${lib_LIBS})
 

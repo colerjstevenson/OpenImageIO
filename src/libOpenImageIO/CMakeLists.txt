@@ -3,9 +3,9 @@
 # https://github.com/AcademySoftwareFoundation/OpenImageIO
 
 if (VERBOSE)
-   message (STATUS "Create imagio_pvt.h from imageio_pvt.h.in")
+   message (STATUS "Create buildopts.h from buildopts.h.in")
 endif ()
-configure_file (imageio_pvt.h.in "${CMAKE_BINARY_DIR}/include/imageio_pvt.h" @ONLY)
+configure_file (buildopts.h.in "${CMAKE_BINARY_DIR}/include/buildopts.h" @ONLY)
 
 file (GLOB libOpenImageIO_hdrs ../include/OpenImageIO/*.h)
 
@@ -56,7 +56,9 @@ set (libOpenImageIO_srcs
                           imagebufalgo_minmaxchan.cpp
                           imagebufalgo_orient.cpp
                           imagebufalgo_xform.cpp
-                          imagebufalgo_yee.cpp imagebufalgo_opencv.cpp
+                          imagebufalgo_demosaic.cpp
+                          imagebufalgo_yee.cpp
+                          imagebufalgo_yee.cpp
                           deepdata.cpp exif.cpp exif-canon.cpp
                           formatspec.cpp
                           icc.cpp imagebuf.cpp
@@ -67,6 +69,7 @@ set (libOpenImageIO_srcs
                           maketexture.cpp
                           bluenoise.cpp
                           printinfo.cpp
+                          oiio_gpu.cpp
                           ../libtexture/texturesys.cpp
                           ../libtexture/texture3d.cpp
                           ../libtexture/environment.cpp
@@ -120,8 +123,7 @@ endif ()
 target_compile_definitions(OpenImageIO
               PRIVATE
                   OIIO_FREETYPE_VERSION="${FREETYPE_VERSION_STRING}"
-                  OIIO_OpenCV_VERSION="${OpenCV_VERSION}"
-                  OIIO_PYTHON_VERSION="${Python_VERSION}"
+                  OIIO_PYTHON_VERSION="${Python3_VERSION}"
                   OIIO_QT_VERSION="${Qt6_VERSION}${Qt5_VERSION}"
                   OIIO_TBB_VERSION="${TBB_VERSION}"
              )
@@ -138,7 +140,6 @@ target_include_directories (OpenImageIO
                             PRIVATE
                                 ${ROBINMAP_INCLUDES}
                             )
-target_include_directories (OpenImageIO SYSTEM PUBLIC ${OpenCV_INCLUDES})
 
 if (NOT BUILD_SHARED_LIBS)
     target_compile_definitions (OpenImageIO PUBLIC OIIO_STATIC_DEFINE=1)
@@ -155,16 +156,14 @@ target_link_libraries (OpenImageIO
             ${OPENIMAGEIO_IMATH_TARGETS}
         PRIVATE
             ${OPENIMAGEIO_OPENEXR_TARGETS}
-            ${OpenCV_LIBRARIES}
             ${format_plugin_libs} # Add all the target link libraries from the plugins
-            $<TARGET_NAME_IF_EXISTS:OpenColorIO::OpenColorIO>
+            OpenColorIO::OpenColorIO
             $<TARGET_NAME_IF_EXISTS:OpenColorIO::OpenColorIOHeaders>
             $<TARGET_NAME_IF_EXISTS:pugixml::pugixml>
             $<TARGET_NAME_IF_EXISTS:TBB::tbb>
             $<TARGET_NAME_IF_EXISTS:Freetype::Freetype>
             ${BZIP2_LIBRARIES}
             ZLIB::ZLIB
-            $<TARGET_NAME_IF_EXISTS:Boost::thread>
             ${CMAKE_DL_LIBS}
         )
 
@@ -175,6 +174,8 @@ endif()
 if (MINGW)
     target_link_libraries (OpenImageIO PRIVATE ws2_32)
 endif()
+
+oiio_cuda_target (OpenImageIO)
 
 file (GLOB iba_sources "imagebufalgo_*.cpp")
 if (MSVC)
@@ -210,6 +211,7 @@ if (CMAKE_UNITY_BUILD)
         endif ()
     endforeach ()
     set_property (SOURCE ${iba_sources} APPEND PROPERTY SKIP_UNITY_BUILD_INCLUSION TRUE)
+    set_property (SOURCE ../openvdb.imageio/openvdbinput.cpp APPEND PROPERTY SKIP_UNITY_BUILD_INCLUSION TRUE)
 endif ()
 
 set_target_properties(OpenImageIO
@@ -251,7 +253,12 @@ if (OIIO_BUILD_TESTS AND BUILD_TESTING)
     add_test (unit_imagecache ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/imagecache_test)
 
     fancy_add_executable (NAME imagebufalgo_test SRC imagebufalgo_test.cpp
-                          LINK_LIBRARIES OpenImageIO ${OpenCV_LIBRARIES}
+                          SYSTEM_INCLUDE_DIRS
+                                ${ROBINMAP_INCLUDES}
+                                ${OpenCV_INCLUDES}            
+                          LINK_LIBRARIES OpenImageIO
+                                         ${OpenCV_LIBRARIES}
+                                         ${OPENIMAGEIO_IMATH_TARGETS}
                           FOLDER "Unit Tests" NO_INSTALL)
     add_test (unit_imagebufalgo ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/imagebufalgo_test)
 

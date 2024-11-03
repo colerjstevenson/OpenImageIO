@@ -26,10 +26,10 @@ message (VERBOSE "CMAKE_CXX_COMPILE_FEATURES = ${CMAKE_CXX_COMPILE_FEATURES}")
 ###########################################################################
 # C++ language standard
 #
-set (CMAKE_CXX_MINIMUM 14)
+set (CMAKE_CXX_MINIMUM 17)
 set (CMAKE_CXX_STANDARD 17 CACHE STRING
-     "C++ standard to build with (14, 17, 20, etc.) Minimum is ${CMAKE_CXX_MINIMUM}.")
-set (DOWNSTREAM_CXX_STANDARD 14 CACHE STRING
+     "C++ standard to build with (17, 20, etc.) Minimum is ${CMAKE_CXX_MINIMUM}.")
+set (DOWNSTREAM_CXX_STANDARD 17 CACHE STRING
      "C++ minimum standard to impose on downstream clients")
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 set (CMAKE_CXX_EXTENSIONS OFF)
@@ -37,6 +37,12 @@ message (STATUS "Building with C++${CMAKE_CXX_STANDARD}, downstream minimum C++$
 if (CMAKE_CXX_STANDARD VERSION_LESS CMAKE_CXX_MINIMUM)
     message (FATAL_ERROR "C++${CMAKE_CXX_STANDARD} is not supported, minimum is C++${CMAKE_CXX_MINIMUM}")
 endif ()
+# Remember the -std flags we need will be used later for custom Cuda builds
+set (CSTD_FLAGS "")
+if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_CLANG OR CMAKE_COMPILER_IS_INTEL)
+    set (CSTD_FLAGS "-std=c++${CMAKE_CXX_STANDARD}")
+endif ()
+
 
 ###########################################################################
 # Figure out which compiler we're using
@@ -63,13 +69,17 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER MATCHES "[Cc]lan
         set (CMAKE_CXX_COMPILER_ID "AppleClang")
         set (CMAKE_COMPILER_IS_APPLECLANG 1)
         string (REGEX REPLACE ".* version ([0-9]+\\.[0-9]+).*" "\\1" APPLECLANG_VERSION_STRING ${clang_full_version_string})
+        set (ANY_CLANG_VERSION_STRING ${APPLECLANG_VERSION_STRING})
         message (VERBOSE "The compiler is Clang: ${CMAKE_CXX_COMPILER_ID} version ${APPLECLANG_VERSION_STRING}")
     elseif (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
         set (CMAKE_COMPILER_IS_INTELCLANG 1)
         string (REGEX MATCH "[0-9]+(\\.[0-9]+)+" INTELCLANG_VERSION_STRING ${clang_full_version_string})
+        set (ANY_CLANG_VERSION_STRING ${INTELCLANG_VERSION_STRING})
         message (VERBOSE "The compiler is Intel Clang: ${CMAKE_CXX_COMPILER_ID} version ${INTELCLANG_VERSION_STRING}")
     else ()
+        set (CMAKE_COMPILER_IS_GENERICCLANG 1)
         string (REGEX REPLACE ".* version ([0-9]+\\.[0-9]+).*" "\\1" CLANG_VERSION_STRING ${clang_full_version_string})
+        set (ANY_CLANG_VERSION_STRING ${CLANG_VERSION_STRING})
         message (VERBOSE "The compiler is Clang: ${CMAKE_CXX_COMPILER_ID} version ${CLANG_VERSION_STRING}")
     endif ()
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "Intel")
@@ -219,7 +229,6 @@ if (CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_CLANG)
     add_compile_options ("-fno-math-errno")
 endif ()
 
-
 # We will use this for ccache and timing
 set (MY_RULE_LAUNCH "")
 
@@ -298,7 +307,7 @@ endif ()
 # the proper compiler directives added to generate code for those ISA
 # capabilities.
 #
-set (USE_SIMD "" CACHE STRING "Use SIMD directives (0, sse2, sse3, ssse3, sse4.1, sse4.2, avx, avx2, avx512f, f16c, aes)")
+set_cache (USE_SIMD "" "Use SIMD directives (0, sse2, sse3, ssse3, sse4.1, sse4.2, avx, avx2, avx512f, f16c, aes)")
 set (SIMD_COMPILE_FLAGS "")
 message (STATUS "Compiling with SIMD level ${USE_SIMD}")
 if (NOT USE_SIMD STREQUAL "")
@@ -306,7 +315,7 @@ if (NOT USE_SIMD STREQUAL "")
         set (SIMD_COMPILE_FLAGS ${SIMD_COMPILE_FLAGS} "-DOIIO_NO_SIMD=1")
     else ()
         set(_highest_msvc_arch 0)
-        string (REPLACE "," ";" SIMD_FEATURE_LIST ${USE_SIMD})
+        string (REPLACE "," ";" SIMD_FEATURE_LIST "${USE_SIMD}")
         foreach (feature ${SIMD_FEATURE_LIST})
             message (VERBOSE "SIMD feature: ${feature}")
             if (MSVC OR CMAKE_COMPILER_IS_INTEL)
@@ -400,29 +409,6 @@ endif ()
 
 
 ###########################################################################
-# Check if we need have std::filesystem on this platform.
-#
-cmake_push_check_state ()
-set (CMAKE_REQUIRED_DEFINITIONS ${CSTD_FLAGS})
-check_cxx_source_compiles("#include <filesystem>
-      int main() { std::filesystem::path p; return 0; }"
-      USE_STD_FILESYSTEM)
-if (USE_STD_FILESYSTEM AND GCC_VERSION AND GCC_VERSION VERSION_LESS 9.0)
-    message (STATUS "Excluding USE_STD_FILESYSTEM because gcc is ${GCC_VERSION}")
-    set (USE_STD_FILESYSTEM OFF)
-endif ()
-if (USE_STD_FILESYSTEM)
-    # Note: std::filesystem seems unreliable for gcc until 9
-    message (STATUS "Compiler supports std::filesystem")
-    add_compile_definitions (USE_STD_FILESYSTEM)
-else ()
-    message (STATUS "Using Boost::filesystem")
-    add_compile_definitions (USE_BOOST_FILESYSTEM)
-endif ()
-cmake_pop_check_state ()
-
-
-###########################################################################
 # Code coverage options
 #
 option (CODECOV "Build code coverage tests" OFF)
@@ -435,9 +421,29 @@ endif ()
 
 
 ###########################################################################
+# Runtime profiling
+#
+set_cache (PROFILER "" "Build executables with profiler support (choices: gperftools)")
+if (PROFILER STREQUAL "gperftools")
+    find_library(PROFILER_LIBRARIES NAMES profiler)
+    message (STATUS "Compiling for profiling with ${PROFILER}, found ${PROFILER_LIBRARIES}")
+endif ()
+
+
+###########################################################################
+# Build profiling
+#
+set_option (${PROJ_NAME}_BUILD_PROFILER "Profile the build process" OFF)
+if (${PROJ_NAME}_BUILD_PROFILER AND CMAKE_COMPILER_IS_CLANG)
+    add_compile_options (-ftime-trace)
+    message (STATUS "Profiling the build process")
+endif ()
+
+
+###########################################################################
 # Sanitizer options
 #
-set (SANITIZE "" CACHE STRING "Build code using sanitizer (address, thread)")
+set_cache (SANITIZE "" "Build code using sanitizer (address, thread, undefined)")
 if (SANITIZE AND (CMAKE_COMPILER_IS_GNUCC OR CMAKE_COMPILER_IS_CLANG))
     message (STATUS "Compiling for sanitizer=${SANITIZE}")
     string (REPLACE "," ";" SANITIZE_FEATURE_LIST ${SANITIZE})
@@ -587,7 +593,7 @@ if (${PROJECT_NAME}_SUPPORTED_RELEASE)
     set (SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
          CACHE STRING "Set the SO version for dynamic libraries")
 else ()
-    # Development master makes no ABI stability guarantee, so we make the
+    # Main development branch makes no ABI stability guarantee, so we make the
     # SO naming capture down to the major.minor.patch level.
     set (SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}
          CACHE STRING "Set the SO version for dynamic libraries")

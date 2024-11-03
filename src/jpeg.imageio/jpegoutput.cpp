@@ -9,7 +9,6 @@
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/fmath.h>
 #include <OpenImageIO/imageio.h>
-#include <OpenImageIO/span_util.h>
 #include <OpenImageIO/tiffutils.h>
 
 #include "jpeg_pvt.h"
@@ -230,7 +229,8 @@ JpgOutput::open(const std::string& name, const ImageSpec& newspec,
                           comment.size() + 1);
     }
 
-    if (Strutil::iequals(m_spec.get_string_attribute("oiio:ColorSpace"), "sRGB"))
+    if (equivalent_colorspace(m_spec.get_string_attribute("oiio:ColorSpace"),
+                              "sRGB"))
         m_spec.attribute("Exif:ColorSpace", 1);
 
     // Write EXIF info
@@ -249,8 +249,8 @@ JpgOutput::open(const std::string& name, const ImageSpec& newspec,
 
     // Write IPTC IIM metadata tags, if we have anything
     std::vector<char> iptc;
-    encode_iptc_iim(m_spec, iptc);
-    if (iptc.size()) {
+    if (m_spec.get_int_attribute("jpeg:iptc", 1)
+        && encode_iptc_iim(m_spec, iptc)) {
         static char photoshop[] = "Photoshop 3.0";
         std::vector<char> head(photoshop, photoshop + strlen(photoshop) + 1);
         static char _8BIM[] = "8BIM";

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
+#include <filesystem>
 #include <iostream>
 #include <random>
 #include <regex>
@@ -15,7 +16,6 @@
 #include <OpenImageIO/dassert.h>
 #include <OpenImageIO/filesystem.h>
 #include <OpenImageIO/platform.h>
-// #include <OpenImageIO/refcnt.h>
 #include <OpenImageIO/strutil.h>
 #include <OpenImageIO/sysutil.h>
 #include <OpenImageIO/ustring.h>
@@ -35,25 +35,13 @@
 #    include <utime.h>
 #endif
 
-#if defined(USE_STD_FILESYSTEM)
-#    include <filesystem>
 namespace filesystem = std::filesystem;
 using std::error_code;
-#else
-#    include <boost/filesystem.hpp>
-namespace filesystem = boost::filesystem;
-using boost::system::error_code;
-#endif
 
 
 
 OIIO_NAMESPACE_BEGIN
 
-
-// boost internally doesn't use MultiByteToWideChar (CP_UTF8,...
-// to convert char* to wchar_t* because they do not know the encoding
-// See boost/filesystem/path.hpp
-// The only correct way to do this is to do the conversion ourselves.
 
 inline filesystem::path
 u8path(string_view name)
@@ -87,18 +75,9 @@ pathstr(const filesystem::path& p)
 
 
 
-#ifdef _MSC_VER
-// fix for https://svn.boost.org/trac/boost/ticket/6320
-const std::string dummy_path = "../dummy_path.txt";
-const std::string dummy_extension
-    = filesystem::path(dummy_path).extension().string();
-#endif
-
 std::string
 Filesystem::filename(string_view filepath) noexcept
 {
-    // To simplify dealing with platform-specific separators and whatnot,
-    // just use the Boost routines:
     try {
         return pathstr(u8path(filepath).filename());
     } catch (...) {
@@ -112,15 +91,6 @@ std::string
 Filesystem::extension(string_view filepath, bool include_dot) noexcept
 {
     std::string s;
-#if !defined(USE_STD_FILESYSTEM)
-    if (filepath.find('.') == 0 && filepath.rfind('.') == 0) {
-        // Work around bug in boost::filesystem::path::extension(), where
-        // ".foo" thinks the extension is foo. But we know, and
-        // std::filesystem::path::extension() knows, that a file called ".foo"
-        // has no extension, that's just the base filename.
-        return s;
-    }
-#endif
     try {
         s = pathstr(u8path(filepath).extension());
     } catch (...) {
@@ -392,18 +362,10 @@ Filesystem::is_executable(string_view path) noexcept
     error_code ec;
     auto stat = filesystem::status(u8path(path), ec);
     auto perm = stat.permissions();
-#ifdef USE_STD_FILESYSTEM
     return (perm & filesystem::perms::owner_exec) != filesystem::perms::none
            || (perm & filesystem::perms::group_exec) != filesystem::perms::none
            || (perm & filesystem::perms::others_exec)
                   != filesystem::perms::none;
-#else
-    return (perm & filesystem::perms::owner_exe) != filesystem::perms::no_perms
-           || (perm & filesystem::perms::group_exe)
-                  != filesystem::perms::no_perms
-           || (perm & filesystem::perms::others_exe)
-                  != filesystem::perms::no_perms;
-#endif
 }
 
 
@@ -494,24 +456,14 @@ Filesystem::temp_directory_path()
 std::string
 Filesystem::unique_path(string_view model)
 {
-#ifdef USE_BOOST_FILESYSTEM
-    // Boost filesystem has unique_path().
-    error_code ec;
-    filesystem::path p = filesystem::unique_path(u8path(model), ec);
-    return ec ? std::string() : pathstr(p);
-#else
     // std::filesystem does not have unique_path(). Punt!
-#    if defined(_WIN32)
-    // boost internally doesn't use MultiByteToWideChar (CP_UTF8,...
-    // to convert char* to wchar_t* because they do not know the encoding
-    // See boost/filesystem/path.hpp
-    // The only correct way to do this is to do the conversion ourselves
+#if defined(_WIN32)
     std::wstring modelStr = Strutil::utf8_to_utf16wstring(model);
     std::wstring name;
-#    else
-    std::string modelStr = model.str();
+#else
+    std::string modelStr = model;
     std::string name;
-#    endif
+#endif
     static const char chrs[] = "0123456789abcdef";
     static std::mt19937 rg { std::random_device {}() };
     static std::uniform_int_distribution<size_t> pick(0, 15);
@@ -523,18 +475,17 @@ Filesystem::unique_path(string_view model)
         for (size_t i = 0, e = modelStr.size(); i < e; ++i)
             if (name[i] == '%')
                 name[i] = chrs[pick(rg)];
-#    if defined(_WIN32)
+#if defined(_WIN32)
         if (!exists(Strutil::utf16_to_utf8(name)))
-#    else
+#else
         if (!exists(name))
-#    endif
+#endif
             break;
     }
-#    if defined(_WIN32)
+#if defined(_WIN32)
     return Strutil::utf16_to_utf8(name);
-#    else
+#else
     return name;
-#    endif
 #endif
 }
 
@@ -674,17 +625,6 @@ Filesystem::read_text_file(string_view filename, std::string& str, size_t size)
     str = contents.str();
     return true;
 }
-
-#if OIIO_VERSION_LESS(2, 6, 0)
-// Backwards link compatibility with the old 2-argument version
-namespace Filesystem {
-bool
-read_text_file(string_view filename, std::string& str)
-{
-    return read_text_file(filename, str, 0);
-}
-}  // namespace Filesystem
-#endif
 
 
 
@@ -1227,7 +1167,7 @@ Filesystem::IOFile::IOFile(string_view filename, Mode mode)
 {
     // Call Filesystem::fopen since it handles UTF-8 file paths on Windows,
     // which std fopen does not.
-    m_file = Filesystem::fopen(m_filename, m_mode == Write ? "wb" : "rb");
+    m_file = Filesystem::fopen(m_filename, m_mode == Write ? "w+b" : "rb");
     if (!m_file) {
         m_mode          = Closed;
         int e           = errno;
@@ -1279,7 +1219,7 @@ Filesystem::IOFile::seek(int64_t offset)
 size_t
 Filesystem::IOFile::read(void* buf, size_t size)
 {
-    if (!m_file || !size || m_mode != Read)
+    if (!m_file || !size || m_mode == Closed)
         return 0;
     size_t r = fread(buf, 1, size, m_file);
     m_pos += r;
@@ -1298,7 +1238,7 @@ Filesystem::IOFile::read(void* buf, size_t size)
 size_t
 Filesystem::IOFile::pread(void* buf, size_t size, int64_t offset)
 {
-    if (!m_file || !size || offset < 0 || m_mode != Read)
+    if (!m_file || !size || offset < 0 || m_mode == Closed)
         return 0;
 #ifdef _WIN32
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -1358,13 +1298,21 @@ Filesystem::IOFile::size() const
 }
 
 void
-Filesystem::IOFile::flush() const
+Filesystem::IOFile::flush()
 {
     if (m_file)
         fflush(m_file);
 }
 
 
+
+size_t
+Filesystem::IOVecOutput::read(void* buf, size_t size)
+{
+    size = pread(buf, size, m_pos);
+    m_pos += size;
+    return size;
+}
 
 size_t
 Filesystem::IOVecOutput::write(const void* buf, size_t size)
@@ -1374,7 +1322,14 @@ Filesystem::IOVecOutput::write(const void* buf, size_t size)
     return size;
 }
 
-
+size_t
+Filesystem::IOVecOutput::pread(void* buf, size_t size, int64_t offset)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    size = std::min(size, size_t(m_buf.size() - offset));
+    memcpy(buf, &m_buf[offset], size);
+    return size;
+}
 
 size_t
 Filesystem::IOVecOutput::pwrite(const void* buf, size_t size, int64_t offset)
@@ -1412,14 +1367,14 @@ Filesystem::IOMemReader::pread(void* buf, size_t size, int64_t offset)
     // N.B. No lock necessary
     if (!m_buf.size() || !size)
         return 0;
-    if (size + size_t(offset) > size_t(m_buf.size())) {
-        if (offset < 0 || offset >= m_buf.size()) {
+    if (size + size_t(offset) > std::size(m_buf)) {
+        if (offset < 0 || size_t(offset) >= std::size(m_buf)) {
             error(Strutil::fmt::format(
                 "Invalid pread offset {} for an IOMemReader buffer of size {}",
                 offset, m_buf.size()));
             return 0;
         }
-        size = m_buf.size() - size_t(offset);
+        size = std::size(m_buf) - size_t(offset);
     }
     memcpy(buf, m_buf.data() + offset, size);
     return size;

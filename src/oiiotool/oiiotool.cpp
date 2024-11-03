@@ -43,6 +43,10 @@
 #    include <OpenImageIO/unittest.h>
 #endif
 
+#ifdef USE_OPENCV
+#    include <OpenImageIO/imagebufalgo_opencv.h>
+#endif
+
 using namespace OIIO;
 using namespace OiioTool;
 using namespace ImageBufAlgo;
@@ -53,8 +57,8 @@ using pvt::print_info_options;
 #    define OIIO_UNIT_TESTS 1
 #endif
 
-#ifndef OIIOTOOL_METADATA_HISTORY_DEFAULT
-#    define OIIOTOOL_METADATA_HISTORY_DEFAULT 0
+#ifndef OPENIMAGEIO_METADATA_HISTORY_DEFAULT
+#    define OPENIMAGEIO_METADATA_HISTORY_DEFAULT 0
 #endif
 
 
@@ -174,12 +178,12 @@ Oiiotool::clear_options()
     output_dither             = false;
     output_force_tiles        = false;
     metadata_nosoftwareattrib = false;
-#if OIIOTOOL_METADATA_HISTORY_DEFAULT
+#if OPENIMAGEIO_METADATA_HISTORY_DEFAULT
     metadata_history = Strutil::from_string<int>(
-        getenv("OIIOTOOL_METADATA_HISTORY", "1"));
+        getenv("OPENIMAGEIO_METADATA_HISTORY", "1"));
 #else
     metadata_history = Strutil::from_string<int>(
-        getenv("OIIOTOOL_METADATA_HISTORY"));
+        getenv("OPENIMAGEIO_METADATA_HISTORY"));
 #endif
     diff_warnthresh    = 1.0e-6f;
     diff_warnpercent   = 0;
@@ -194,6 +198,27 @@ Oiiotool::clear_options()
     input_dataformat    = TypeUnknown;
     input_bitspersample = 0;
     input_channelformats.clear();
+}
+
+
+
+ColorConfig&
+Oiiotool::colorconfig()
+{
+    // It's safe to check the pointer and if it exists, return it, since
+    // once it's created, it will never be changed.
+    if (ColorConfig* cc = m_colorconfig.get())
+        return *cc;
+
+    // Otherwise, we need to create it. But we need to be thread-safe.
+    static std::mutex colorconfig_mutex;
+    std::lock_guard lock(colorconfig_mutex);
+    if (!m_colorconfig) {
+        if (debug)
+            print("oiiotool Creating ColorConfig\n");
+        m_colorconfig.reset(new ColorConfig);
+    }
+    return *m_colorconfig.get();
 }
 
 
@@ -699,8 +724,13 @@ unset_autopremult(Oiiotool& ot, cspan<const char*> argv)
 static void
 action_label(Oiiotool& ot, cspan<const char*> argv)
 {
-    string_view labelname      = ot.express(argv[1]);
-    ot.image_labels[labelname] = ot.curimg;
+    string_view command = ot.express(argv[0]);
+    string_view name    = ot.express(argv[1]);
+    if (!Strutil::string_is_identifier(name)) {
+        ot.errorfmt(command, "Invalid label name \"{}\"", name);
+        return;
+    }
+    ot.image_labels[name] = ot.curimg;
 }
 
 
@@ -1229,12 +1259,30 @@ control_for(Oiiotool& ot, cspan<const char*> argv)
         std::string variable = ot.express(argv[1]);
         string_view range    = ot.express(argv[2]);
 
+        float val = 0, limit = 0, step = 1;
+        bool valid     = true;
         auto rangevals = Strutil::extract_from_list_string<float>(range);
-        if (rangevals.size() == 1)
-            rangevals.insert(rangevals.begin(), 0.0f);  // supply missing start
-        if (rangevals.size() == 2)
-            rangevals.push_back(1.0f);  // supply missing step
-        if (rangevals.size() != 3) {
+        if (rangevals.size() == 1) {
+            val   = 0.0f;
+            limit = rangevals[0];
+            step  = limit >= 0.0f ? 1.0f : -1.0f;
+        } else if (rangevals.size() == 2) {
+            val   = rangevals[0];
+            limit = rangevals[1];
+            step  = limit >= val ? 1.0f : -1.0f;
+        } else if (rangevals.size() == 3) {
+            val   = rangevals[0];
+            limit = rangevals[1];
+            step  = rangevals[2];
+        } else {
+            valid = false;
+        }
+        // step can't be zero or be opposite direction of val -> limit
+        valid &= (step != 0.0f);
+        if ((val < limit && step < 0.0f) || (val > limit && step > 0.0f))
+            valid = false;
+
+        if (!valid) {
             ot.errorfmt(argv[0], "Invalid range \"{}\"", range);
             return;
         }
@@ -1244,24 +1292,22 @@ control_for(Oiiotool& ot, cspan<const char*> argv)
         // There are two cases here: either we are hitting this --for
         // for the first time (need to initialize and set up the control
         // record), or we are re-iterating on a loop we already set up.
-        float val;
         if (ot.control_stack.empty()
             || ot.control_stack.top().start_arg != ot.ap.current_arg()) {
             // First time through the loop. Note that we recognize our first
             // time by the fact that the top of the control stack doesn't have
             // a start_arg that is this --for command.
-            val = rangevals[0];
             ot.push_control("for", ot.ap.current_arg(), true);
             // Strutil::print("First for!\n");
         } else {
             // We've started this loop already, this is at least our 2nd time
             // through. Just increment the variable and update the condition
             // for another pass through the loop.
-            val = ot.uservars.get_float(variable) + rangevals[2];
+            val = ot.uservars.get_float(variable) + step;
             // Strutil::print("Repeat for!\n");
         }
         ot.uservars.attribute(variable, val);
-        bool cond                        = val < rangevals[1];
+        bool cond = step >= 0.0f ? val < limit : val > limit;
         ot.control_stack.top().condition = cond;
         ot.ap.running(ot.running());
         // Strutil::print("for {} {} : {}={} cond={} (now running={})\n", variable,
@@ -1397,7 +1443,13 @@ set_user_variable(Oiiotool& ot, cspan<const char*> argv)
     string_view command = ot.express(argv[0]);
     string_view name    = ot.express(argv[1]);
     string_view value   = ot.express(argv[2]);
-    auto options        = ot.extract_options(command);
+
+    if (!Strutil::string_is_identifier(name)) {
+        ot.errorfmt(command, "Invalid variable name \"{}\"", name);
+        return 0;
+    }
+
+    auto options = ot.extract_options(command);
     TypeDesc type(options["type"].as_string());
 
     set_attribute_helper(ot.uservars, name, value, type);
@@ -2161,9 +2213,9 @@ static void
 set_colorconfig(Oiiotool& ot, cspan<const char*> argv)
 {
     OIIO_DASSERT(argv.size() == 2);
-    ot.colorconfig.reset(argv[1]);
-    if (ot.colorconfig.has_error()) {
-        ot.errorfmt("--colorconfig", "{}", ot.colorconfig.geterror());
+    ot.colorconfig().reset(argv[1]);
+    if (ot.colorconfig().has_error()) {
+        ot.errorfmt("--colorconfig", "{}", ot.colorconfig().geterror());
     }
 }
 
@@ -2180,7 +2232,7 @@ public:
     }
     OpSetColorSpace(Oiiotool& ot, string_view opname, int argc,
                     const char* argv[])
-        : OpSetColorSpace(ot, opname, { argv, argc })
+        : OpSetColorSpace(ot, opname, { argv, span_size_t(argc) })
     {
     }
     bool setup() override
@@ -2248,7 +2300,7 @@ public:
         }
         bool ok = ImageBufAlgo::colorconvert(*img[0], *img[1], fromspace,
                                              tospace, unpremult, contextkey,
-                                             contextvalue, &ot.colorconfig);
+                                             contextvalue, &ot.colorconfig());
         if (!ok && !strict) {
             // The color transform failed, but we were told not to be
             // strict, so ignore the error and just copy destination to
@@ -2323,7 +2375,7 @@ OIIOTOOL_OP(ociolook, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
         tospace = img[1]->spec().get_string_attribute("oiio:Colorspace");
     return ImageBufAlgo::ociolook(*img[0], *img[1], lookname, fromspace,
                                   tospace, unpremult, inverse, contextkey,
-                                  contextvalue, &ot.colorconfig);
+                                  contextvalue, &ot.colorconfig());
 });
 
 
@@ -2342,7 +2394,8 @@ OIIOTOOL_OP(ociodisplay, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
         fromspace = img[1]->spec().get_string_attribute("oiio:Colorspace");
     return ImageBufAlgo::ociodisplay(*img[0], *img[1], displayname, viewname,
                                      fromspace, looks, unpremult, inverse,
-                                     contextkey, contextvalue, &ot.colorconfig);
+                                     contextkey, contextvalue,
+                                     &ot.colorconfig());
 });
 
 
@@ -2353,7 +2406,21 @@ OIIOTOOL_OP(ociofiletransform, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
     bool inverse     = op.options().get_int("inverse");
     bool unpremult   = op.options().get_int("unpremult");
     return ImageBufAlgo::ociofiletransform(*img[0], *img[1], name, unpremult,
-                                           inverse, &ot.colorconfig);
+                                           inverse, &ot.colorconfig());
+});
+
+
+
+// --ocionamedtransform
+OIIOTOOL_OP(ocionamedtransform, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
+    string_view name         = op.args(1);
+    std::string contextkey   = op.options()["key"];
+    std::string contextvalue = op.options()["value"];
+    bool unpremult           = op.options().get_int("unpremult");
+    bool inverse             = op.options().get_int("inverse");
+    return ImageBufAlgo::ocionamedtransform(*img[0], *img[1], name, unpremult,
+                                            inverse, contextkey, contextvalue,
+                                            &ot.colorconfig());
 });
 
 
@@ -2642,9 +2709,8 @@ action_channels(Oiiotool& ot, cspan<const char*> argv)
         for (int m = 0, miplevels = R->miplevels(s); m < miplevels; ++m) {
             // Shuffle the indexed/named channels
             bool ok = ImageBufAlgo::channels((*R)(s, m), (*A)(s, m),
-                                             (int)channels.size(), &channels[0],
-                                             &values[0], &newchannelnames[0],
-                                             false);
+                                             (int)channels.size(), channels,
+                                             values, newchannelnames, false);
             if (!ok) {
                 ot.error(command, (*R)(s, m).geterror());
                 break;
@@ -2918,7 +2984,7 @@ action_colorcount(Oiiotool& ot, cspan<const char*> argv)
 
     imagesize_t* count = OIIO_ALLOCA(imagesize_t, ncolors);
     bool ok = ImageBufAlgo::color_count((*ot.curimg)(0, 0), count, ncolors,
-                                        &colorvalues[0], &eps[0]);
+                                        colorvalues, eps);
     if (ok) {
         for (int col = 0; col < ncolors; ++col)
             Strutil::print("{:8}  {}\n", count[col], colorstrings[col]);
@@ -2952,8 +3018,8 @@ action_rangecheck(Oiiotool& ot, cspan<const char*> argv)
 
     imagesize_t lowcount = 0, highcount = 0, inrangecount = 0;
     bool ok = ImageBufAlgo::color_range_check((*ot.curimg)(0, 0), &lowcount,
-                                              &highcount, &inrangecount,
-                                              &low[0], &high[0]);
+                                              &highcount, &inrangecount, low,
+                                              high);
     if (ok) {
         Strutil::print("{:8}  < {}\n", lowcount, lowarg);
         Strutil::print("{:8}  > {}\n", highcount, higharg);
@@ -3379,9 +3445,10 @@ OIIOTOOL_OP(warp, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
         ok &= ImageBufAlgo::rangecompress(tmpimg, *src);
         src = &tmpimg;
     }
-    ImageBuf::WrapMode wrap = ImageBuf::WrapMode_from_string(wrapname);
-    ok &= ImageBufAlgo::warp(*img[0], *src, *(Imath::M33f*)&M[0], filtername,
-                             0.0f, recompute_roi, wrap);
+    ok &= ImageBufAlgo::warp(*img[0], *src, *(Imath::M33f*)&M[0],
+                             { { "filtername", filtername },
+                               { "recompute_roi", int(recompute_roi) },
+                               { "wrap", wrapname } });
     if (highlightcomp && ok) {
         // re-expand the range in place
         ok &= ImageBufAlgo::rangeexpand(*img[0], *img[0]);
@@ -3389,6 +3456,17 @@ OIIOTOOL_OP(warp, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
     return ok;
 });
 
+// --demosaic
+OIIOTOOL_OP(demosaic, 1, [&](OiiotoolOp& op, span<ImageBuf*> img) {
+    std::string pattern   = op.options().get_string("pattern");
+    std::string algorithm = op.options().get_string("algorithm");
+    std::string layout    = op.options().get_string("layout");
+
+    return ImageBufAlgo::demosaic(*img[0], *img[1],
+                                  { { "pattern", pattern },
+                                    { "algorithm", algorithm },
+                                    { "layout", layout } });
+});
 
 
 // --st_warp
@@ -3428,6 +3506,16 @@ action_pop(Oiiotool& ot, cspan<const char*> argv)
 
 
 
+// --popbottom
+static void
+action_popbottom(Oiiotool& ot, cspan<const char*> argv)
+{
+    OIIO_DASSERT(argv.size() == 1);
+    ot.popbottom();
+}
+
+
+
 // --dup
 static void
 action_dup(Oiiotool& ot, cspan<const char*> argv)
@@ -3452,6 +3540,64 @@ action_swap(Oiiotool& ot, cspan<const char*> argv)
     ImageRecRef A(ot.pop());
     ot.push(B);
     ot.push(A);
+}
+
+
+
+// --stackreverse
+static void
+action_stackreverse(Oiiotool& ot, cspan<const char*> argv)
+{
+    OIIO_DASSERT(argv.size() == 1);
+    string_view command = ot.express(argv[0]);
+    if (!ot.curimg) {
+        ot.error(command, "requires at least one loaded images");
+        return;
+    }
+    if (ot.image_stack.empty())
+        return;  // only curimg -- reversing does nothing
+    ot.image_stack.push_back(ot.curimg);
+    std::reverse(ot.image_stack.begin(), ot.image_stack.end());
+    ot.curimg = ot.image_stack.back();
+    ot.image_stack.pop_back();
+}
+
+
+
+// --stackextract
+static void
+action_stackextract(Oiiotool& ot, cspan<const char*> argv)
+{
+    OIIO_DASSERT(argv.size() == 2);
+    string_view command = ot.express(argv[0]);
+    int index           = Strutil::stoi(ot.express(argv[1]));
+    if (index < 0 || index >= ot.image_stack_depth()) {
+        ot.errorfmt(command, "index {} out of range for stack depth {}", index,
+                    ot.image_stack_depth());
+        return;
+    }
+    if (ot.image_stack.empty())
+        return;  // only curimg -- extract does nothing
+    ot.image_stack.push_back(ot.curimg);
+    // Transform the index to the index of the stack data structure
+    index = int(ot.image_stack.size()) - 1 - index;
+    // Copy that item for safe keeping
+    ImageRecRef newtop = ot.image_stack[index];
+    // Remove it from the stack
+    ot.image_stack.erase(ot.image_stack.begin() + size_t(index));
+    // Now put it back on the top
+    ot.curimg = newtop;
+}
+
+
+
+// --stackclear
+static void
+action_stackclear(Oiiotool& ot, cspan<const char*> argv)
+{
+    OIIO_DASSERT(argv.size() == 1);
+    ot.image_stack.clear();
+    ot.curimg = ImageRecRef();
 }
 
 
@@ -3526,7 +3672,7 @@ action_pattern(Oiiotool& ot, cspan<const char*> argv)
         auto options = ot.extract_options(pattern);
         std::vector<float> fill(nchans, 1.0f);
         Strutil::extract_from_list_string(fill, options.get_string("color"));
-        ok = ImageBufAlgo::fill(ib, &fill[0]);
+        ok = ImageBufAlgo::fill(ib, fill);
     } else if (Strutil::istarts_with(pattern, "fill")) {
         auto options = ot.extract_options(pattern);
         std::vector<float> topleft(nchans, 1.0f);
@@ -3541,22 +3687,21 @@ action_pattern(Oiiotool& ot, cspan<const char*> argv)
                                                                  "bottomleft"))
             && Strutil::extract_from_list_string(
                 bottomright, options.get_string("bottomright"))) {
-            ok = ImageBufAlgo::fill(ib, &topleft[0], &topright[0],
-                                    &bottomleft[0], &bottomright[0]);
+            ok = ImageBufAlgo::fill(ib, topleft, topright, bottomleft,
+                                    bottomright);
         } else if (Strutil::extract_from_list_string(topleft,
                                                      options.get_string("top"))
                    && Strutil::extract_from_list_string(
                        bottomleft, options.get_string("bottom"))) {
-            ok = ImageBufAlgo::fill(ib, &topleft[0], &bottomleft[0]);
+            ok = ImageBufAlgo::fill(ib, topleft, bottomleft);
         } else if (Strutil::extract_from_list_string(topleft,
                                                      options.get_string("left"))
                    && Strutil::extract_from_list_string(
                        topright, options.get_string("right"))) {
-            ok = ImageBufAlgo::fill(ib, &topleft[0], &topright[0], &topleft[0],
-                                    &topright[0]);
+            ok = ImageBufAlgo::fill(ib, topleft, topright, topleft, topright);
         } else if (Strutil::extract_from_list_string(
                        topleft, options.get_string("color"))) {
-            ok = ImageBufAlgo::fill(ib, &topleft[0]);
+            ok = ImageBufAlgo::fill(ib, topleft);
         }
     } else if (Strutil::istarts_with(pattern, "checker")) {
         auto options = ot.extract_options(pattern);
@@ -3567,8 +3712,8 @@ action_pattern(Oiiotool& ot, cspan<const char*> argv)
         std::vector<float> color2(nchans, 1.0f);
         Strutil::extract_from_list_string(color1, options.get_string("color1"));
         Strutil::extract_from_list_string(color2, options.get_string("color2"));
-        ok = ImageBufAlgo::checker(ib, width, height, depth, &color1[0],
-                                   &color2[0], 0, 0, 0);
+        ok = ImageBufAlgo::checker(ib, width, height, depth, color1, color2, 0,
+                                   0, 0);
     } else if (Strutil::istarts_with(pattern, "noise")) {
         auto options     = ot.extract_options(pattern);
         std::string type = options.get_string("type", "gaussian");
@@ -3622,14 +3767,19 @@ action_capture(Oiiotool& ot, cspan<const char*> argv)
     OIIO_DASSERT(argv.size() == 1);
     string_view command = ot.express(argv[0]);
     OTScopedTimer timer(ot, command);
+
+#ifdef USE_OPENCV
     auto options = ot.extract_options(command);
     int camera   = options.get_int("camera");
-
-    ImageBuf ib = ImageBufAlgo::capture_image(camera /*, TypeDesc::FLOAT*/);
+    ImageBuf ib  = ImageBufAlgo::capture_image(camera /*, TypeDesc::FLOAT*/);
     if (ib.has_error()) {
         ot.error(command, ib.geterror());
         return;
     }
+#else
+    ot.warning(command, "capture requires OpenCV support");
+    ImageBuf ib(ImageSpec(640, 480, 3, TypeDesc::FLOAT));
+#endif
     ImageRecRef img(new ImageRec("capture", ib.spec(), ot.imagecache));
     (*img)().copy(ib);
     ot.push(img);
@@ -3976,10 +4126,12 @@ public:
         }
         if (do_warp[current_subimage()])
             ok &= ImageBufAlgo::warp(*img[0], *src, M[current_subimage()],
-                                     filtername, 0.0f, false,
-                                     ImageBuf::WrapDefault, edgeclamp);
+                                     { { "filtername", filtername },
+                                       { "recompute_roi", 0 },
+                                       { "edgeclamp", edgeclamp } });
         else
-            ok &= ImageBufAlgo::resize(*img[0], *src, filtername, 0.0f,
+            ok &= ImageBufAlgo::resize(*img[0], *src,
+                                       { { "filtername", filtername } },
                                        img[0]->roi());
         if (highlightcomp && ok) {
             // re-expand the range in place
@@ -4096,7 +4248,7 @@ action_fit(Oiiotool& ot, cspan<const char*> argv)
     bool pad               = options.get_int("pad");
     std::string filtername = options["filter"];
     std::string fillmode   = options["fillmode"];
-    bool exact             = options.get_int("exact");
+    int exact              = options.get_int("exact");
     bool highlightcomp     = options.get_int("highlightcomp");
 
     int subimages = allsubimages ? A->subimages() : 1;
@@ -4117,7 +4269,10 @@ action_fit(Oiiotool& ot, cspan<const char*> argv)
         newspec.x = newspec.full_x = fit_full_x;
         newspec.y = newspec.full_y = fit_full_y;
         (*R)(s, 0).reset(newspec);
-        ImageBufAlgo::fit((*R)(s, 0), *src, filtername, 0.0f, fillmode, exact);
+        ImageBufAlgo::fit((*R)(s, 0), *src,
+                          { { "filtername", filtername },
+                            { "fillmode", fillmode },
+                            { "exact", exact } });
         if (highlightcomp) {
             // re-expand the range in place
             ImageBufAlgo::rangeexpand((*R)(s, 0), (*R)(s, 0));
@@ -4662,28 +4817,27 @@ action_fill(Oiiotool& ot, cspan<const char*> argv)
                                                                  "bottomleft"))
             && Strutil::extract_from_list_string(
                 bottomright, options.get_string("bottomright"))) {
-            ok = ImageBufAlgo::fill(Rib, &topleft[0], &topright[0],
-                                    &bottomleft[0], &bottomright[0],
-                                    ROI(x, x + w, y, y + h));
+            ok = ImageBufAlgo::fill(Rib, topleft, topright, bottomleft,
+                                    bottomright, ROI(x, x + w, y, y + h));
         } else if (Strutil::extract_from_list_string(topleft,
                                                      options.get_string("top"))
                    && Strutil::extract_from_list_string(
                        bottomleft, options.get_string("bottom"))) {
-            ok = ImageBufAlgo::fill(Rib, &topleft[0], &bottomleft[0],
+            ok = ImageBufAlgo::fill(Rib, topleft, bottomleft,
                                     ROI(x, x + w, y, y + h));
         } else if (Strutil::extract_from_list_string(topleft,
                                                      options.get_string("left"))
                    && Strutil::extract_from_list_string(
                        topright, options.get_string("right"))) {
-            ok = ImageBufAlgo::fill(Rib, &topleft[0], &topright[0], &topleft[0],
-                                    &topright[0], ROI(x, x + w, y, y + h));
+            ok = ImageBufAlgo::fill(Rib, topleft, topright, topleft, topright,
+                                    ROI(x, x + w, y, y + h));
         } else if (Strutil::extract_from_list_string(
                        topleft, options.get_string("color"))) {
-            ok = ImageBufAlgo::fill(Rib, &topleft[0], ROI(x, x + w, y, y + h));
+            ok = ImageBufAlgo::fill(Rib, topleft, ROI(x, x + w, y, y + h));
         } else {
             ot.warning(command,
                        "No recognized fill parameters: filling with white.");
-            ok = ImageBufAlgo::fill(Rib, &topleft[0], ROI(x, x + w, y, y + h));
+            ok = ImageBufAlgo::fill(Rib, topleft, ROI(x, x + w, y, y + h));
         }
         if (!ok) {
             ot.error(command, Rib.geterror());
@@ -4733,8 +4887,7 @@ action_clamp(Oiiotool& ot, cspan<const char*> argv)
         for (int m = 0, miplevels = R->miplevels(s); m < miplevels; ++m) {
             ImageBuf& Rib((*R)(s, m));
             ImageBuf& Aib((*A)(s, m));
-            bool ok = ImageBufAlgo::clamp(Rib, Aib, &min[0], &max[0],
-                                          clampalpha01);
+            bool ok = ImageBufAlgo::clamp(Rib, Aib, min, max, clampalpha01);
             if (!ok) {
                 ot.error(command, Rib.geterror());
                 return;
@@ -4901,7 +5054,8 @@ input_file(Oiiotool& ot, cspan<const char*> argv)
     TypeDesc input_dataformat(fileoptions.get_string("type"));
     std::string channel_set = fileoptions["ch"];
 
-    for (int i = 0; i < argv.size(); i++) {  // FIXME: this loop is pointless
+    for (int i = 0; i < std::ssize(argv); i++) {
+        // FIXME: this loop is pointless, since there is ever only one arg
         OTScopedTimer timer(ot, command);
         string_view filename = ot.express(argv[i]);
         auto found           = ot.image_labels.find(filename);
@@ -5029,7 +5183,7 @@ input_file(Oiiotool& ot, cspan<const char*> argv)
         if (autocc) {
             // Try to deduce the color space it's in
             std::string colorspace(
-                ot.colorconfig.getColorSpaceFromFilepath(filename));
+                ot.colorconfig().getColorSpaceFromFilepath(filename));
             if (colorspace.size() && ot.debug)
                 print("  From {}, we deduce color space \"{}\"\n", filename,
                       colorspace);
@@ -5041,9 +5195,9 @@ input_file(Oiiotool& ot, cspan<const char*> argv)
                     print("  Metadata of {} indicates color space \"{}\"\n",
                           colorspace, filename);
             }
-            std::string linearspace = ot.colorconfig.resolve("linear");
+            std::string linearspace = ot.colorconfig().resolve("scene_linear");
             if (colorspace.size()
-                && !ot.colorconfig.equivalent(colorspace, linearspace)) {
+                && !ot.colorconfig().equivalent(colorspace, linearspace)) {
                 std::string cmd = "colorconvert:strict=0";
                 if (autoccunpremult)
                     cmd += ":unpremult=1";
@@ -5327,12 +5481,12 @@ output_file(Oiiotool& ot, cspan<const char*> argv)
     // automatically set -d based on the name if --autocc is used.
     bool autocc          = fileoptions.get_int("autocc", ot.autocc);
     bool autoccunpremult = fileoptions.get_int("unpremult", ot.autoccunpremult);
-    std::string outcolorspace = ot.colorconfig.getColorSpaceFromFilepath(
+    std::string outcolorspace = ot.colorconfig().getColorSpaceFromFilepath(
         filename);
     if (autocc && outcolorspace.size()) {
         TypeDesc type;
         int bits;
-        type = ot.colorconfig.getColorSpaceDataType(outcolorspace, &bits);
+        type = ot.colorconfig().getColorSpaceDataType(outcolorspace, &bits);
         if (type.basetype != TypeDesc::UNKNOWN) {
             if (ot.debug)
                 std::cout << "  Deduced data type " << type << " (" << bits
@@ -5350,7 +5504,7 @@ output_file(Oiiotool& ot, cspan<const char*> argv)
         }
     }
     if (autocc) {
-        string_view linearspace = ot.colorconfig.resolve("linear");
+        string_view linearspace = ot.colorconfig().resolve("scene_linear");
         std::string currentspace
             = ir->spec()->get_string_attribute("oiio:ColorSpace", linearspace);
         // Special cases where we know formats should be particular color
@@ -5846,24 +6000,28 @@ print_ocio_info(Oiiotool& ot, std::ostream& out)
     using Strutil::print;
     int columns = Sysutil::terminal_columns() - 1;
 
-    int ociover = ot.colorconfig.OpenColorIO_version_hex();
-    if (ociover)
+    ColorConfig& colorconfig = ot.colorconfig();
+    if (int ociover = colorconfig.OpenColorIO_version_hex())
         out << "OpenColorIO " << (ociover >> 24) << '.'
             << ((ociover >> 16) & 0xff) << '.' << ((ociover >> 8) & 0xff);
     else
         out << "No OpenColorIO";
-    out << "\nColor config: " << ot.colorconfig.configname() << "\n";
+    out << "\nColor config: " << colorconfig.configname() << "\n";
     out << "Known color spaces: \n";
-    const char* linear = ot.colorconfig.getColorSpaceNameByRole("linear");
-    for (int i = 0, e = ot.colorconfig.getNumColorSpaces(); i < e; ++i) {
-        const char* n = ot.colorconfig.getColorSpaceNameByIndex(i);
+    const char* linear       = colorconfig.getColorSpaceNameByRole("linear");
+    const char* scene_linear = colorconfig.getColorSpaceNameByRole(
+        "scene_linear");
+    for (int i = 0, e = colorconfig.getNumColorSpaces(); i < e; ++i) {
+        const char* n = colorconfig.getColorSpaceNameByIndex(i);
         out << "    - " << quote_if_spaces(n);
-        if ((linear && !ot.colorconfig.equivalent(n, "linear")
-             && ot.colorconfig.equivalent(n, linear))
-            || ot.colorconfig.isColorSpaceLinear(n))
+        if ((scene_linear && !colorconfig.equivalent(n, "scene_linear")
+             && colorconfig.equivalent(n, scene_linear))
+            || (linear && !colorconfig.equivalent(n, "linear")
+                && colorconfig.equivalent(n, linear))
+            || colorconfig.isColorSpaceLinear(n))
             out << " (linear)";
         out << "\n";
-        auto aliases = ot.colorconfig.getAliases(n);
+        auto aliases = colorconfig.getAliases(n);
         if (aliases.size()) {
             std::stringstream s;
             s << "      aliases: " << join_with_quotes(aliases, ", ");
@@ -5871,41 +6029,41 @@ print_ocio_info(Oiiotool& ot, std::ostream& out)
         }
     }
 
-    int roles = ot.colorconfig.getNumRoles();
+    int roles = colorconfig.getNumRoles();
     if (roles) {
         print(out, "Known roles:\n");
         for (int i = 0; i < roles; ++i) {
-            const char* r = ot.colorconfig.getRoleByIndex(i);
+            const char* r = colorconfig.getRoleByIndex(i);
             print(out, "    - {} -> {}\n", quote_if_spaces(r),
-                  quote_if_spaces(ot.colorconfig.getColorSpaceNameByRole(r)));
+                  quote_if_spaces(colorconfig.getColorSpaceNameByRole(r)));
         }
     }
 
-    int nlooks = ot.colorconfig.getNumLooks();
+    int nlooks = colorconfig.getNumLooks();
     if (nlooks) {
         print(out, "Known looks:\n");
         for (int i = 0; i < nlooks; ++i)
             print(out, "    - {}\n",
-                  quote_if_spaces(ot.colorconfig.getLookNameByIndex(i)));
+                  quote_if_spaces(colorconfig.getLookNameByIndex(i)));
     }
 
-    const char* default_display = ot.colorconfig.getDefaultDisplayName();
-    int ndisplays               = ot.colorconfig.getNumDisplays();
+    const char* default_display = colorconfig.getDefaultDisplayName();
+    int ndisplays               = colorconfig.getNumDisplays();
     if (ndisplays) {
         out << "Known displays: (* indicates default)\n";
         for (int i = 0; i < ndisplays; ++i) {
-            const char* d = ot.colorconfig.getDisplayNameByIndex(i);
+            const char* d = colorconfig.getDisplayNameByIndex(i);
             out << "    - " << quote_if_spaces(d);
             if (!strcmp(d, default_display))
                 out << " (*)";
-            const char* default_view = ot.colorconfig.getDefaultViewName(d);
-            int nviews               = ot.colorconfig.getNumViews(d);
+            const char* default_view = colorconfig.getDefaultViewName(d);
+            int nviews               = colorconfig.getNumViews(d);
             if (nviews) {
                 out << "\n      ";
                 std::stringstream s;
                 s << "views: ";
                 for (int i = 0; i < nviews; ++i) {
-                    const char* v = ot.colorconfig.getViewNameByIndex(d, i);
+                    const char* v = colorconfig.getViewNameByIndex(d, i);
                     s << quote_if_spaces(v);
                     if (!strcmp(v, default_view))
                         s << " (*)";
@@ -5917,7 +6075,16 @@ print_ocio_info(Oiiotool& ot, std::ostream& out)
             out << "\n";
         }
     }
-    if (!ot.colorconfig.supportsOpenColorIO())
+
+    int nnamed_transforms = colorconfig.getNumNamedTransforms();
+    if (nnamed_transforms) {
+        out << "Named transforms:\n";
+        for (int i = 0; i < nnamed_transforms; ++i) {
+            const char* x = colorconfig.getNamedTransformNameByIndex(i);
+            out << "    - " << quote_if_spaces(x) << "\n";
+        }
+    }
+    if (!colorconfig.supportsOpenColorIO())
         out << "No OpenColorIO support was enabled at build time.\n";
 }
 
@@ -5931,17 +6098,24 @@ print_build_info(Oiiotool& ot, std::ostream& out)
 
     auto platform = format("OIIO {} | {}", OIIO_VERSION_STRING,
                            OIIO::get_string_attribute("build:platform"));
-    print("{}\n", Strutil::wordwrap(platform, columns, 4));
+    print(out, "{}\n", Strutil::wordwrap(platform, columns, 4));
 
     auto buildinfo = format("    Build compiler: {} | C++{}/{}",
                             OIIO::get_string_attribute("build:compiler"),
                             OIIO_CPLUSPLUS_VERSION, __cplusplus);
-    print("{}\n", Strutil::wordwrap(buildinfo, columns, 4));
+    print(out, "{}\n", Strutil::wordwrap(buildinfo, columns, 4));
 
     auto hwbuildfeats
         = format("    HW features enabled at build: {}",
                  OIIO::get_string_attribute("build:simd", "no SIMD"));
-    print("{}\n", Strutil::wordwrap(hwbuildfeats, columns, 4));
+    print(out, "{}\n", Strutil::wordwrap(hwbuildfeats, columns, 4));
+#ifdef OIIO_USE_CUDA
+    int cudaver = OIIO::get_int_attribute("cuda:build_version");
+    print(out, "    CUDA {}.{}.{} support enabled at build time\n",
+          cudaver / 10000, (cudaver / 100) % 100, cudaver % 100);
+#else
+    print(out, "    No CUDA support (disabled / unavailable at build time)\n");
+#endif
 
     std::string libs = OIIO::get_string_attribute("build:dependencies");
     if (libs.size()) {
@@ -5967,12 +6141,12 @@ print_help_end(Oiiotool& ot, std::ostream& out)
     out << formatted_format_list("Input", "input_format_list") << "\n";
     out << formatted_format_list("Output", "output_format_list") << "\n";
 
-    if (int ociover = ot.colorconfig.OpenColorIO_version_hex())
+    if (int ociover = ot.colorconfig().OpenColorIO_version_hex())
         print(out, "OpenColorIO {}.{}.{}\n", (ociover >> 24),
               ((ociover >> 16) & 0xff), ((ociover >> 8) & 0xff));
     else
         print(out, "No OpenColorIO\n");
-    print(out, "    Color config: {}\n", ot.colorconfig.configname());
+    print(out, "    Color config: {}\n", ot.colorconfig().configname());
     print(out, "    Run `oiiotool --colorconfiginfo` for a "
                "full color management inventory.\n");
 
@@ -5991,13 +6165,29 @@ print_help_end(Oiiotool& ot, std::ostream& out)
                                        Sysutil::physical_memory()
                                            / float(1 << 30),
                                        OIIO::get_string_attribute("hw:simd"));
-    print(out, "{}\n", Strutil::wordwrap(hwinfo, columns, 4));
+    print(out, "{}\n", Strutil::wordwrap(hwinfo, columns, 4, " ", ","));
+    if (OIIO::get_int_attribute("cuda:devices_found")
+        /*pvt::compute_device() == pvt::ComputeDevice::CUDA*/) {
+        auto compinfo = Strutil::fmt::format(
+            "Compute hardware available{}: CUDA on {}, driver {}, runtime {}, compat {}, memory {:.1f} GB",
+            pvt::compute_device() == pvt::ComputeDevice::CUDA
+                ? ""
+                : " (but not enabled)",
+            OIIO::get_string_attribute("cuda:device_name"),
+            OIIO::get_int_attribute("cuda:driver_version"),
+            OIIO::get_int_attribute("cuda:runtime_version"),
+            OIIO::get_int_attribute("cuda:compatibility"),
+            OIIO::get_int_attribute("cuda:total_memory_MB") / 1024.0);
+        print(out, "{}\n", Strutil::wordwrap(compinfo, columns, 4, " ", ","));
+    } else {
+        print(out, "    No compute specific hardware enabled.\n");
+    }
 
     // Print the path to the docs. If found, use the one installed in the
     // same area is this executable, otherwise just point to the copy on
     // GitHub corresponding to our version of the softare.
     print(out, "Full OIIO documentation can be found at\n");
-    print(out, "    https://openimageio.readthedocs.io\n");
+    print(out, "    https://docs.openimageio.org\n");
 }
 
 
@@ -6098,7 +6288,7 @@ Oiiotool::getargs(int argc, char* argv[])
     ap.arg("-n", &ot.dryrun)
       .help("No saved output (dry run)");
     ap.arg("--no-error-exit", ot.noerrexit)
-      .help("Do not exit upon error, try to process additional comands (danger!)");
+      .help("Do not exit upon error, try to process additional commands (danger!)");
     ap.arg("-a", &ot.allsubimages)
       .help("Do operations on all subimages/miplevels");
     ap.arg("--debug", &ot.debug)
@@ -6137,6 +6327,11 @@ Oiiotool::getargs(int argc, char* argv[])
     ap.arg("--threads %d:N")
       .help("Number of threads (default 0 == #cores)")
       .OTACTION(set_threads);
+    ap.arg("--gpu")
+      .help("[EXPERIMENTAL] Use GPU if available (options: device=...)")
+      .action([&](cspan<const char*>){
+                  OIIO::attribute("gpu:device", "CUDA");
+              });
     ap.arg("--no-autopremult")
       .help("Turn off automatic premultiplication of images with unassociated alpha")
       .OTACTION(unset_autopremult);
@@ -6226,6 +6421,12 @@ Oiiotool::getargs(int argc, char* argv[])
     ap.arg("--crash")
       .hidden()
       .action(crash_me);
+    ap.arg("--test-bad-format")
+      .hidden()
+      .action([&](cspan<const char*>){
+                  print("{}\n", Strutil::fmt::format("hey hey {:d} {}",
+                                                     "foo", "bar", "oops"));
+              });
 
     ap.separator("Commands that read images:");
     ap.arg("-i %s:FILENAME")
@@ -6632,6 +6833,9 @@ Oiiotool::getargs(int argc, char* argv[])
     ap.arg("--text %s:TEXT")
       .help("Render text into the current image (options: x=, y=, size=, color=)")
       .OTACTION(action_text);
+    ap.arg("--demosaic")
+      .help("Demosaic (options: pattern=%s, algorithm=%s, layout=%s)")
+      .OTACTION(action_demosaic);
 
     ap.separator("Manipulating channels or subimages:");
     ap.arg("--ch %s:CHANLIST")
@@ -6666,6 +6870,9 @@ Oiiotool::getargs(int argc, char* argv[])
       .OTACTION(action_flatten);
 
     ap.separator("Image stack manipulation:");
+    ap.arg("--label %s")
+      .help("Label the top image")
+      .OTACTION(action_label);
     ap.arg("--dup")
       .help("Duplicate the current image (push a copy onto the stack)")
       .OTACTION(action_dup);
@@ -6675,9 +6882,18 @@ Oiiotool::getargs(int argc, char* argv[])
     ap.arg("--pop")
       .help("Throw away the current image")
       .OTACTION(action_pop);
-    ap.arg("--label %s")
-      .help("Label the top image")
-      .OTACTION(action_label);
+    ap.arg("--popbottom")
+      .help("Throw away the image on the bottom of the stack")
+      .OTACTION(action_popbottom);
+    ap.arg("--stackreverse")
+      .help("Throw away the image on the bottom of the stack")
+      .OTACTION(action_stackreverse);
+    ap.arg("--stackextract %d:INDEX")
+      .help("Move an indexed stack item to the top of the stack")
+      .OTACTION(action_stackextract);
+    ap.arg("--stackclear")
+      .help("Remove all images from the stack, leaving it empty")
+      .OTACTION(action_stackclear);
 
     ap.separator("Color management:");
     ap.arg("--colorconfiginfo")
@@ -6710,6 +6926,9 @@ Oiiotool::getargs(int argc, char* argv[])
     ap.arg("--ociofiletransform %s:FILENAME")
       .help("Apply the named OCIO filetransform (options: inverse=, unpremult=)")
       .OTACTION(action_ociofiletransform);
+    ap.arg("--ocionamedtransform %s:NAME")
+      .help("Apply the named OCIO namedtransform (options: inverse=, key=, value=, unpremult=)")
+      .OTACTION(action_ocionamedtransform);
     ap.arg("--unpremult")
       .help("Divide all color channels of the current image by the alpha to \"un-premultiply\"")
       .OTACTION(action_unpremult);

@@ -56,10 +56,8 @@
 #    define OIIO_TIFFLIB_VERSION 40003
 #elif TIFFLIB_VERSION >= 20111221
 #    define OIIO_TIFFLIB_VERSION 40000
-#elif TIFFLIB_VERSION >= 20090820
-#    define OIIO_TIFFLIB_VERSION 30900
 #else
-#    error "libtiff 3.9.0 or later is required"
+#    error "libtiff 4.0.0 or later is required"
 #endif
 // clang-format on
 
@@ -1256,6 +1254,9 @@ TIFFInput::readspec(bool read_meta)
             // should be interpreted to be sRGB.
             if (m_spec.get_int_attribute("Exif:ColorSpace") != 0xffff)
                 m_spec.attribute("oiio:ColorSpace", "sRGB");
+            // NOTE: We must set "oiio:ColorSpace" explicitly, not call
+            // set_colorspace, or it will erase several other TIFF attribs we
+            // need to preserve.
         }
         // TIFFReadEXIFDirectory seems to do something to the internal state
         // that requires a TIFFSetDirectory to set things straight again.
@@ -1673,7 +1674,9 @@ TIFFInput::read_native_scanline(int subimage, int miplevel, int y, int /*z*/,
                                                 m_rgbadata.data(),
                                                 ORIENTATION_TOPLEFT, 0);
             if (!ok) {
-                errorfmt("Unknown error trying to read TIFF as RGBA");
+                std::string err = oiio_tiff_last_error();
+                errorfmt("Unknown error trying to read TIFF as RGBA ({})",
+                         err.size() ? err.c_str() : "unknown error");
                 return false;
             }
         }
@@ -2054,7 +2057,9 @@ TIFFInput::read_native_tile(int subimage, int miplevel, int x, int y, int z,
         m_rgbadata.resize(m_spec.tile_pixels());
         bool ok = TIFFReadRGBATile(m_tif, x, y, m_rgbadata.data());
         if (!ok) {
-            errorfmt("Unknown error trying to read TIFF as RGBA");
+            std::string err = oiio_tiff_last_error();
+            errorfmt("Unknown error trying to read TIFF as RGBA ({})",
+                     err.size() ? err.c_str() : "unknown error");
             return false;
         }
         // Copy, and use stride magic to reverse top-to-bottom, because

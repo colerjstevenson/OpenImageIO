@@ -39,7 +39,7 @@
 // prior release.
 //
 // Note that these designations only apply to released branches. Changes
-// in the main development branch ("master") do not make any compatibility
+// in the main development branch ("main") do not make any compatibility
 // guarantees at all.
 //
 #define OIIO_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
@@ -167,8 +167,10 @@ namespace @PROJ_NAME@ = @PROJ_NAMESPACE_V@;
 /// Version 24 Added a PIMPL pointers to ImageInput and ImageOutput and
 ///     removed some unnecessary fields that were exposed.
 /// Version 25 added the thumbnail retrieval and set. (OIIO 2.3)
+/// Version 26 deprecated the old stateful ImageInput::read_* methods.
+///     (OIIO 2.6.3/3.0)
 
-#define OIIO_PLUGIN_VERSION 25
+#define OIIO_PLUGIN_VERSION 26
 
 #define OIIO_PLUGIN_NAMESPACE_BEGIN OIIO_NAMESPACE_BEGIN
 #define OIIO_PLUGIN_NAMESPACE_END OIIO_NAMESPACE_END
@@ -185,7 +187,7 @@ namespace @PROJ_NAME@ = @PROJ_NAMESPACE_V@;
 #define OIIO_USING_IMATH_VERSION_MAJOR @Imath_VERSION_MAJOR@
 #define OIIO_USING_IMATH_VERSION_MINOR @Imath_VERSION_MINOR@
 
-// Which CPP standard (11, 14, etc.) was this copy of OIIO *built* with?
+// Which CPP standard (17, 20, etc.) was this copy of OIIO *built* with?
 #define OIIO_BUILD_CPP @CMAKE_CXX_STANDARD@
 
 // DEPRECATED(2.1): old macros separately giving compatibility.

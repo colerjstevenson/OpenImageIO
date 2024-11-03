@@ -4,8 +4,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # https://github.com/AcademySoftwareFoundation/OpenImageIO
 
-from __future__ import print_function
-from __future__ import absolute_import
 import os
 import glob
 import sys
@@ -100,18 +98,6 @@ ociover = subprocess.check_output([oiio_app('oiiotool').strip(),
 ociover = ociover.strip().decode('utf-8')[0:3]
 ociover = os.getenv('OCIO_VERSION_OVERRIDE', ociover)
 #print(f"OpenColorIO version = '{ociover}'")
-
-OCIO_env = os.getenv('OCIO')
-if OCIO_env is None:
-    os.environ['OCIO'] = 'ocio://default'
-    if ociover == '2.2' or ociover == '2.3' :
-        colorconfig_file = os.getenv('OIIO_TESTSUITE_OCIOCONFIG', 'ocio://default')
-    else :
-        colorconfig_file = os.getenv('OIIO_TESTSUITE_OCIOCONFIG',
-                                     '../common/OpenColorIO/nuke-default/config.ocio')
-    if not colorconfig_file.startswith('ocio://') :
-        colorconfig_file = make_relpath(colorconfig_file)
-
 
 command = ""
 outputs = [ "out.txt" ]    # default
@@ -354,9 +340,7 @@ def iconvert (args, silent=False, concat=True, failureok=False) :
 
 # Construct a command that will run oiiotool and append its output to out.txt
 def oiiotool (args, silent=False, concat=True, failureok=False) :
-    cmd = (oiio_app("oiiotool") + " "
-           + args)
-    #       + "-colorconfig " + colorconfig_file + " "
+    cmd = (oiio_app("oiiotool") + " " + args)
     if not silent :
         cmd += redirect
     if failureok :

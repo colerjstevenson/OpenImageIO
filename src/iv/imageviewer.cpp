@@ -64,7 +64,7 @@ IsSpecSrgb(const ImageSpec& spec)
 static const char *s_file_filters = ""
     "Image Files (*.bmp *.cin *.dcm *.dds *.dpx *.fits *.gif *.hdr *.ico *.iff "
     "*.jpg *.jpe *.jpeg *.jif *.jfif *.jfi *.jp2 *.j2k *.jxl *.exr *.png *.pbm *.pgm "
-    "*.ppm *.psd *.ptex *.rla *.sgi *.rgb *.rgba *.bw *.int *.inta *.pic *.tga "
+    "*.ppm *.psd *.ptex *.R3D *.r3d *.rla *.sgi *.rgb *.rgba *.bw *.int *.inta *.pic *.tga "
     "*.tpic *.tif *.tiff *.tx *.env *.sm *.vsm *.vdb *.webp *.zfile);;"
     "BMP (*.bmp);;"
     "Cineon (*.cin);;"
@@ -85,6 +85,7 @@ static const char *s_file_filters = ""
     "Portable Network Graphics (*.png);;"
     "PNM / Netpbm (*.pbm *.pgm *.ppm);;"
     "Ptex (*.ptex);;"
+    "R3D (*.R3D *.r3d);;"
     "RLA (*.rla);;"
     "SGI (*.sgi *.rgb *.rgba *.bw *.int *.inta);;"
     "Softimage PIC (*.pic);;"
@@ -110,12 +111,10 @@ ImageViewer::ImageViewer(bool use_ocio, const std::string& image_color_space,
     , m_fullscreen(false)
     , m_default_gamma(1)
     , m_darkPalette(false)
-#ifdef HAS_OCIO_2
     , m_useOCIO(use_ocio)
     , m_ocioColourSpace(image_color_space)
     , m_ocioDisplay(display)
     , m_ocioView(view)
-#endif  // HAS_OCIO_2
 {
     readSettings(false);
 
@@ -138,11 +137,7 @@ ImageViewer::ImageViewer(bool use_ocio, const std::string& image_color_space,
     slideDuration_ms = 5000;
     slide_loop       = true;
 
-#ifdef HAS_OCIO_2
     glwin = new IvGL_OCIO(this, *this);
-#else
-    glwin = new IvGL(this, *this);
-#endif
 
     glwin->setPalette(m_palette);
     glwin->resize(m_default_width, m_default_height);
@@ -391,6 +386,12 @@ ImageViewer::createActions()
     //    toggleImageAct->setEnabled(true);
     connect(toggleImageAct, SIGNAL(triggered()), this, SLOT(toggleImage()));
 
+    toggleWindowGuidesAct
+        = new QAction(tr("Show display and data window borders"), this);
+    toggleWindowGuidesAct->setCheckable(true);
+    connect(toggleWindowGuidesAct, SIGNAL(triggered()), this,
+            SLOT(toggleWindowGuides()));
+
     slideShowAct = new QAction(tr("Start Slide Show"), this);
     connect(slideShowAct, SIGNAL(triggered()), this, SLOT(slideShow()));
 
@@ -461,7 +462,7 @@ ImageViewer::createActions()
             SLOT(setSlideShowDuration(int)));
 }
 
-#ifdef HAS_OCIO_2
+
 
 void
 ImageViewer::createOCIOMenus(QMenu* parent)
@@ -605,7 +606,6 @@ ImageViewer::ocioDisplayViewAction()
     }
 }
 
-#endif  // HAS_OCIO_2
 
 void
 ImageViewer::createMenus()
@@ -680,6 +680,7 @@ ImageViewer::createMenus()
     viewMenu->addAction(prevImageAct);
     viewMenu->addAction(nextImageAct);
     viewMenu->addAction(toggleImageAct);
+    viewMenu->addAction(toggleWindowGuidesAct);
     viewMenu->addSeparator();
     viewMenu->addAction(zoomInAct);
     viewMenu->addAction(zoomOutAct);
@@ -693,9 +694,7 @@ ImageViewer::createMenus()
     viewMenu->addMenu(channelMenu);
     viewMenu->addMenu(colormodeMenu);
 
-#ifdef HAS_OCIO_2
     createOCIOMenus(viewMenu);
-#endif
 
     viewMenu->addMenu(expgamMenu);
     menuBar()->addMenu(viewMenu);
@@ -797,7 +796,9 @@ ImageViewer::readSettings(bool ui_is_set_up)
     slideShowDuration->setValue(
         settings.value("slideShowDuration", 10).toInt());
 
-    ImageCache* imagecache = ImageCache::create(true);
+    OIIO::attribute("imagebuf:use_imagecache", 1);
+
+    auto imagecache = ImageCache::create(true);
     imagecache->attribute("automip", autoMipmap->isChecked());
     imagecache->attribute("max_memory_MB", (float)maxMemoryIC->value());
 }
@@ -1043,14 +1044,8 @@ void
 ImageViewer::moveToNewWindow()
 {
     if (m_images.size()) {
-#ifdef HAS_OCIO_2
         ImageViewer* imageViewer = new ImageViewer(m_useOCIO, m_ocioColourSpace,
                                                    m_ocioDisplay, m_ocioView);
-#else
-        std::string dummy;
-        ImageViewer* imageViewer = new ImageViewer(false, dummy, dummy, dummy);
-#endif
-
         imageViewer->show();
         imageViewer->rawcolor(rawcolor());
         imageViewer->add_image(m_images[m_current_image]->name());
@@ -1357,6 +1352,14 @@ void
 ImageViewer::toggleImage()
 {
     current_image(m_last_image);
+}
+
+
+
+void
+ImageViewer::toggleWindowGuides()
+{
+    ((QOpenGLWidget*)(glwin))->update();
 }
 
 

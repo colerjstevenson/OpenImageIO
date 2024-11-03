@@ -28,7 +28,7 @@ echo "Before my brew installs:"
 brew list --versions
 
 # All cases except for clang-format target, we need the dependencies.
-brew install --display-times -q gcc ccache cmake ninja boost || true
+brew install --display-times -q gcc ccache cmake ninja || true
 brew link --overwrite gcc
 brew install --display-times -q python@${PYTHON_VERSION} || true
 brew unlink python@3.8 || true
@@ -44,10 +44,10 @@ brew install --display-times -q freetype libraw dcmtk pybind11 numpy || true
 brew install --display-times -q ffmpeg libheif ptex || true
 brew install --display-times -q tbb || true
 brew install --display-times -q openvdb || true
-if [[ "${USE_OPENCV}" != "0" ]] ; then
+if [[ "${USE_OPENCV}" != "0" ]] && [[ "${INSTALL_OPENCV:=1}" != "0" ]] ; then
     brew install --display-times -q opencv || true
 fi
-if [[ "${USE_QT}" != "0" ]] ; then
+if [[ "${USE_QT:=1}" != "0" ]] && [[ "${INSTALL_QT:=1}" != "0" ]] ; then
     brew install --display-times -q qt${QT_VERSION}
 fi
 if [[ "${USE_LLVM:=0}" != "0" ]] || [[ "${LLVMBREWVER}" != "" ]]; then

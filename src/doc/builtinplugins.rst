@@ -1077,6 +1077,10 @@ control aspects of the writing itself:
      - ptr
      - Pointer to a ``Filesystem::IOProxy`` that will handle the I/O, for
        example by writing to a memory buffer.
+   * - ``jpeg:iptc``
+     - int (1)
+     - If zero, will suppress writing the IPTC metadata block to the
+       JPEG file.
    * - ``jpeg:progressive``
      - int
      - If nonzero, will write a progressive JPEG file.
@@ -1239,8 +1243,8 @@ control aspects of the writing itself:
    :header-rows: 1
 
    * - Output Configuration Attribute
-	 - Type
-	 - JPEG XL header data or explanation
+     - Type
+     - JPEG XL header data or explanation
    * - ``oiio:dither``
      - int
      - If nonzero and outputting UINT8 values in the file from a source of
@@ -1257,19 +1261,19 @@ control aspects of the writing itself:
        for output rather than being assumed to be associated and get automatic
        un-association to store in the file.
    * - ``compression``
-	 - string
-	 - If supplied, must be ``"jpegxl"``, but may optionally have a quality
-	   value appended, like ``"jpegxl:90"``. Quality can be 0-100, with 100
-	   meaning lossless.
+     - string
+     - If supplied, must be ``"jpegxl"``, but may optionally have a quality
+       value appended, like ``"jpegxl:90"``. Quality can be 0-100, with 100
+       meaning lossless.
    * - ``jpegxl:distance``
-	 - float
+     - float
      - Target visual distance in JND units, lower = higher quality.
        0.0 = mathematically lossless. 1.0 = visually lossless.
        Recommended range: 0.5 .. 3.0. Allowed range: 0.0 ... 25.0. 
        Mutually exclusive with ``*compression jpegxl:*```.
    * - ``jpegxl:effort``
      - int
-	 - Encoder effort setting. Range: 1 .. 10.
+     - Encoder effort setting. Range: 1 .. 10.
        Default: 7. Higher numbers allow more computation at the expense of time.
        For lossless, generally it will produce smaller files.
        For lossy, higher effort should more accurately reach the target quality.
@@ -1286,8 +1290,31 @@ control aspects of the writing itself:
        sensor noise. Higher number = grainier image, e.g. 100 gives a low
        amount of noise, 3200 gives a lot of noise. Default is 0.
        Encoded as metadata in the image.
-
-|
+   * - ``jpegxl:use_boxes``
+     - int (bool)
+     - If nonzero, will enable metadata (Exif, XMP, jumb, iptc) writing to the
+       output file. Default is 1.
+   * - ``jpegxl:compress_boxes``
+     - int (bool)
+     - If nonzero, will enable metadata compression. Default is 1.
+   * - ``jpegxl:exif_box``
+     - int (bool)
+     - If nonzero, will enable Exif metadata writing to the output file.
+       Default is 1.
+   * - ``jpegxl:xmp_box``
+     - int (bool)
+     - If nonzero, will enable XMP metadata writing to the output file.
+       Default is 1.
+   * - ``jpegxl:jumb_box``
+     - int (bool)
+     - If nonzero, will enable JUMBF metadata writing to the output file.
+       Default is 0. (dows not supported at this moment in OIIO)
+   * - ``jpegxl:iptc_box``
+     - int (bool)
+     - If nonzero, will enable IPTC metadata writing to the output file.
+       Default is 0.
+       (Does not work as expected at this moment. Box is written but content
+       unreadable in exif readers.)
 
 .. _sec-bundledplugins-ffmpeg:
 
@@ -1340,6 +1367,9 @@ Some special attributes are used for movie files:
    * - ``FramesPerSecond``
      - int[2] (rational)
      - Frames per second
+   * - ``ffmpeg:TimeCode``
+     - string
+     - Start time timecode
 
 
 
@@ -1852,12 +1882,12 @@ attributes are supported:
      - int
      - If nonzero, the PNM file is big-endian (the default is little-endian).  
    * - ``pnm:pfmflip``
-      - int
-      - If this configuration hint is present and is zero, the automatic
-      vertical flipping of PFM image will be disabled (i.e., scanline 0 will
-      really be the first one stored in the file). If nonzero (the default),
-      float PFM files will store scanline 0 as the last scanline in the file
-      (i.e. the visual "top" of the image).
+     - int
+     - If this configuration hint is present and is zero, the automatic
+       vertical flipping of PFM image will be disabled (i.e., scanline 0 will
+       really be the first one stored in the file). If nonzero (the default),
+       float PFM files will store scanline 0 as the last scanline in the file
+       (i.e. the visual "top" of the image).
 
 **Configuration settings for PNM output**
 
@@ -1890,13 +1920,13 @@ control aspects of the writing itself:
        determine whether to write an ASCII or binary file.
        Float PFM files are always written in binary format.
    * - ``pnm:pfmflip``
-      - int
-      - If this configuration hint is present and is zero, for PFM files,
-      scanline 0 will really be stored first in the file, thus disabling the
-      usual automatically flipping that accounts for PFM files conventionally
-      being stored in bottom-to-top order. If nonzero (the default), float
-      PFM files will store scanline 0 as the last scanline in the file (i.e.
-      the visual "top" of the image).
+     - int
+     - If this configuration hint is present and is zero, for PFM files,
+       scanline 0 will really be stored first in the file, thus disabling the
+       usual automatically flipping that accounts for PFM files conventionally
+       being stored in bottom-to-top order. If nonzero (the default), float
+       PFM files will store scanline 0 as the last scanline in the file (i.e.
+       the visual "top" of the image).
 
 **Custom I/O Overrides**
 
@@ -2038,7 +2068,32 @@ options are supported:
      - If nonzero, will use libraw's exposure correction. (Default: 0)
    * - ``raw:use_camera_wb``
      - int
-     - If 1, use libraw's camera white balance adjustment. (Default: 1)
+     - If 1, use libraw's camera white balance adjustment. Takes precedence
+       over ``raw:use_auto_wb``, ``raw:greybox``, ``raw:user_mul``. 
+       (Default: 1)
+   * - ``raw:use_auto_wb``
+     - int
+     - If 1, white balance automatically by averaging over the entire image.
+       Only applies if ``raw:use_camera_wb`` is not equal to 0. Takes 
+       precedence over ``raw:greybox``, ``raw:user_mul``.
+       (Default: 0)
+   * - ``raw:greybox``
+     - int[4]
+     - White balance by averaging over the given box. The four values are the 
+       X and Y coordinate of the top-left corner, the width and the height.
+       Only applies if the size is non-zero, and ``raw:use_camera_wb`` is not 
+       equal to 0, ``raw:use_auto_wb`` is not equal to 0. Takes 
+       precedence over ``raw:user_mul``.
+       (Default: 0, 0, 0, 0; meaning no correction.)
+   * - ``raw:cropbox``
+     - int[4]
+     - If present, sets the box to crop the image to. The four values are the 
+       X and Y coordinate of the top-left corner, the width and the height.
+       If not present, the image is cropped to match the in-camera JPEG,
+       assuming the necessary information is present in the metadata. The
+       cropping is done by setting the display window, so the whole image
+       pixels are still available. The default cropping can be disabled by
+       setting the cropbox to zero size.
    * - ``raw:use_camera_matrix``
      - int
      - Whether to use the embedded color profile, if it's present: 0 =
@@ -2046,6 +2101,10 @@ options are supported:
    * - ``raw:adjust_maximum_thr``
      - float
      - If nonzero, auto-adjusting maximum value. (Default:0.0)
+   * - ``raw:user_black``
+     - int
+     - If not negative, sets the camera minimum value that will be normalized to
+       appear 0. (Default: -1)
    * - ``raw:user_sat``
      - int
      - If nonzero, sets the camera maximum value that will be normalized to
@@ -2062,7 +2121,8 @@ options are supported:
    * - ``raw:user_mul``
      - float[4]
      - Sets user white balance coefficients. Only applies if ``raw:use_camera_wb``
-       is not equal to 0.
+       is not equal to 0, ``raw:use_auto_wb`` is not equal to 0, and the 
+       ``raw:greybox`` box is zero size.
    * - ``raw:ColorSpace``
      - string
      - Which color primaries to use for the returned pixel values: ``raw``,
@@ -2119,6 +2179,11 @@ options are supported:
        0 - do not use FBDD noise reduction, 1 - light FBDD reduction,
        2 (and more) - full FBDD reduction
        (Default: 0)
+   * - ``raw:max_raw_memory_mb``
+     - int
+     - Maximum memory allocation for processing of raw images. Stop processing if
+       raw buffer size grows larger than that value (in megabytes).
+       (Default: 2048)
 
 
 |

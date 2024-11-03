@@ -123,12 +123,18 @@ contents of an expression may be any of:
   If there is no metadata whose name matches, the expression will not have any
   substitution made and an error will be issued.
   
-  The *imagename* may be one of: `TOP` (the top or current image), `IMG[i]`
-  describing the i-th image on the stack (thus `TOP` is a synonym for
-  `IMG[0]`, the next image on the stack is `IMG[1]`, etc.), or `IMG[name]`
-  to denote an image named by filename or by label name. Remember that the
-  positions on the stack (including `TOP`) refer to *at that moment*, with
-  successive commands changing the contents of the top image.
+  The *imagename* may be one of:
+
+  * `TOP` : the top or current image;
+  * `BOTTOM` : the image at the bottom of the stack;
+  * `IMG[index]` : if `index` evaluates to an integer `i`, the i-th image on
+    the stack (thus `TOP` is a synonym for `IMG[0]`, the next image on the
+    stack is `IMG[1]`, ..., and `BOTTOM` is a synonmym for `IMG[NIMAGES-1]`);
+  * `IMG[name]` : an image named by filename or by label name.
+
+  Remember that the positions on the stack (including `TOP`) refer to *at that
+  moment*, with successive commands changing the contents of the top image. If
+  the
   
   The *metadata* may be any of:
   
@@ -235,7 +241,7 @@ contents of an expression may be any of:
 
 To illustrate how this works, consider the following command, which trims
 a four-pixel border from all sides and outputs a new image prefixed with
-"cropped_", without needing to know the resolution or filename of the
+"`cropped_`", without needing to know the resolution or filename of the
 original image::
 
     oiiotool input.exr -cut "{TOP.width-2*4}x{TOP.height-2*4}+{TOP.x+4}+{TOP.y+4}" \
@@ -267,11 +273,12 @@ The usual programming constructs are supported:
 * Iteration : `--for` *variable* *range* *commands...* `--endfor`
 
   The range is a sequence of one to three comma-separated numbers: *begin*,
-  *end*, and *step*; *begin* and *end* (step is assumed to be 1); or just
-  *end* (begin assumed to be 0, step assumed to be 1). As in Python, the range
-  has an "exclusive end" -- when the *variable* is equal to *end*, the loop
-  will terminate, without actually running the commands for the *end* value
-  itself.
+  *end*, and *step*; *begin* and *end* (step is assumed to be 1 if *begin*
+  `<`` *end*, or -1 if *begin* `>` *end); or just *end* (begin assumed to be
+  0, step assumed to be 1 or -1, depending on the relationship between *begin*
+  and *end*). As in Python, the range has an "exclusive end" -- when the
+  *variable* is equal to *end*, the loop will terminate, without actually
+  running the commands for the *end* value itself.
 
 Section :ref:`sec-oiiotool-control-flow-commands` contains more detailed
 descriptions of these commands and some examples to more clearly illustrate
@@ -929,6 +936,13 @@ output each one to a different file, with names `sub0001.tif`,
     default (also if n=0) is to use as many threads as there are cores
     present in the hardware.
 
+.. option:: --gpu <n>
+
+    EXPERIMENTAL: Enable a GPU or other compute acceleration device, if
+    available.
+
+    This was added in OIIO 3.0.
+
 .. option:: --cache <size>
 
     Causes images to be read through an ImageCache and set the underlying
@@ -975,6 +989,10 @@ output each one to a different file, with names `sub0001.tif`,
     sign), it will be saved as `int`; if it also contains a decimal point, it
     will be saved as a `float`; otherwise, it will be saved as a `string`.
 
+    The name of the variable must be in the form of an "identifier" (a
+    sequence of alphanumeric characters and underscores, starting with a
+    letter or underscore).
+
     This command was added in OIIO 2.4.0.
 
     Examples::
@@ -1006,11 +1024,12 @@ output each one to a different file, with names `sub0001.tif`,
     for each iteration. The range may be one, two, or three numbers
     separated by commas, indicating
 
-    - *end* : Iterate from 0 to *end*, incrementing by 1 each time.
-    - *begin* ``,`` *end* : Iterate from *begin* to *end*, incrementing
-       by 1 each time.
+    - *end* : Iterate from 0 to *end*, incrementing by 1 each iteration (or
+      decrementing, if *end* `<` 0).
+    - *begin* ``,`` *end* : Iterate from *begin* to *end*, incrementing by
+      1 each iteration (or  decrementing by 1, if *end* `<` *begin*).
     - *begin* ``,`` *end* ``,`` *step* : Iterate from *begin* to *end*,
-      incrementing by *step* each time.
+      adding *step* to the value after each iteration.
 
     Note that the *end* value is "exclusive," that is, the loop will
     terminate once the value is equal to end, and the loop body will
@@ -1036,6 +1055,13 @@ output each one to a different file, with names `sub0001.tif`,
         5
         7
         9
+
+        $ oiiotool --for i 5,0,-1 --echo "i = {i}" --endfor
+        5
+        4
+        3
+        2
+        1
 
 .. option:: --while <condition> commands... --endwhile
 
@@ -1965,7 +1991,7 @@ current top image.
     image to potentially reveal any proprietary information that might have
     been present in the command line arguments.
     
-    If the `OIIOTOOL_METADATA_HISTORY` environment variable is set to a
+    If the `OPENIMAGEIO_METADATA_HISTORY` environment variable is set to a
     nonzero integer value, the `--history` option will be enabled by default,
     but can be disabled on the command line with `--no-history`.
 
@@ -1976,7 +2002,7 @@ current top image.
     Prior to OpenImageIO 2.5.11, the full information was always written, but
     could be overridden with `--nosoftwareattrib`. Beginning with 2.5.11, the
     default changed to only write the software name and version (unless the
-    `OIIOTOOL_METADATA_HISTORY` environment variable is set), and require the
+    `OPENIMAGEIO_METADATA_HISTORY` environment variable is set), and require the
     new `--history` option to cause the command line arguments to be written
     as metadata.
 
@@ -2213,10 +2239,16 @@ current top image.
 :program:`oiiotool` commands that adjust the image stack
 ========================================================
 
-.. option:: --pop
+.. option:: --label <name>
 
-    Pop the image stack, discarding the current image and thereby making the
-    next image on the stack into the new current image.
+    Gives a name to (and saves) the current image at the top of the stack.
+    Thereafter, the label name may be used to refer to that saved image, in
+    the usual manner that an ordinary input image would be specified by
+    filename.
+
+    The name of the label must be in the form of an "identifier" (a sequence
+    of alphanumeric characters and underscores, starting with a letter or
+    underscore).
 
 .. option:: --dup
 
@@ -2228,12 +2260,31 @@ current top image.
 
     Swap the current image and the next one on the stack.
 
-.. option:: --label <name>
+.. option:: --pop
 
-    Gives a name to (and saves) the current image at the top of the stack.
-    Thereafter, the label name may be used to refer to that saved image, in
-    the usual manner that an ordinary input image would be specified by
-    filename.
+    Pop the image stack, discarding the current image and thereby making the
+    next image on the stack into the new current image.
+
+.. option:: --popbottom
+
+    Remove and discard the bottom image from the image stack.
+    (Added in OIIO 3.0.)
+
+.. option:: --stackreverse
+
+    Reverse the order of the entire stack, i.e. making the top be the new
+    bottom and the old bottom be the new top. (Added in OIIO 3.0.)
+
+.. option:: --stackextract <index>
+
+    Move the indexed item (0 for the top of the stack, 1 for the next item
+    down, etc.) to the top of the stack, preserving the relative order of all
+    other items. (Added in OIIO 3.0.)
+
+.. option:: --stackclear <index>
+
+    Remove all items from the stack, leaving it empty and with no "current"
+    image. (Added in OIIO 3.0.)
 
 
 :program:`oiiotool` commands that make entirely new images
@@ -2730,8 +2781,7 @@ current top image.
       `max=` *vals*
         Specify the maximum range value(s), default 1.0.
       `scontrast=` *vals*
-        Specify sigmoidal contrast slope value(s),
-      default 1.0.
+        Specify sigmoidal contrast slope value(s), default 1.0.
       `sthresh=` *vals*
         Specify sigmoidal threshold value(s) giving the position of maximum
         slope, default 0.5.
@@ -4062,11 +4112,11 @@ current top image.
            -fill:topleft=.1,.1,.1:topright=1,0,0:bottomleft=0,1,0:botromright=0,0,1 \
                640x480 -o gradient.tif
 
-    .. |textimg1| image:: figures/gradient.jpg
+    .. |gradimg1| image:: figures/gradient.jpg
        :width: 2.0 in
-    .. |textimg2| image:: figures/gradienth.jpg
+    .. |gradimg2| image:: figures/gradienth.jpg
        :width: 2.0 in
-    .. |textimg2| image:: figures/gradient4.jpg
+    .. |gradimg3| image:: figures/gradient4.jpg
        :width: 2.0 in
     ..
 
@@ -4124,7 +4174,7 @@ current top image.
        :width: 2.0 in
     .. |textimg2| image:: figures/textcentered.jpg
        :width: 2.0 in
-    .. |textimg2| image:: figures/textshadowed.jpg
+    .. |textimg3| image:: figures/textshadowed.jpg
        :width: 2.0 in
     ..
     
@@ -4387,6 +4437,39 @@ will be printed with the command `oiiotool --colorconfiginfo`.
     Examples::
 
         oiiotool in.jpg --ociofiletransform footransform.csp -o out.jpg
+
+
+.. option:: --ocionamedtransform <name>
+
+    Replace the current image with a new image whose pixels are transformed
+    using the named OpenColorIO named transform.  Optional appended arguments
+    include:
+
+    - `key=` *name*, `value=` *str*
+
+      Adds a key/value pair to the "context" that OpenColorIO will used
+      when applying the look. Multiple key/value pairs may be specified by
+      making each one a comma-separated list.
+    
+    - `inverse=` *val* :
+
+      If *val* is nonzero, inverts the color transformation.
+
+    - `unpremult=` *val* :
+
+      If the numeric *val* is nonzero, the pixel values will be
+      "un-premultipled" (divided by alpha) prior to the actual color
+      conversion, and then re-multipled by alpha afterwards. The default is
+      0, meaning the color transformation not will be automatically
+      bracketed by divide-by-alpha / mult-by-alpha operations.
+
+      `:subimages=` *indices-or-names*
+        Include/exclude subimages (see :ref:`sec-oiiotool-subimage-modifier`).
+
+    Examples::
+
+        oiiotool in.exr --ocionamedtransform:inverse=1 srgb_crv -o out.jpg
+
 
 .. option:: --unpremult
 

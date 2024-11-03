@@ -9,6 +9,8 @@
 #include <memory>
 #include <vector>
 
+#include <tsl/robin_map.h>
+
 #include <OpenImageIO/dassert.h>
 #include <OpenImageIO/deepdata.h>
 #include <OpenImageIO/filesystem.h>
@@ -21,23 +23,29 @@
 
 #include "imageio_pvt.h"
 
-#include <boost/thread/tss.hpp>
-using boost::thread_specific_ptr;
 
 
 OIIO_NAMESPACE_BEGIN
 using namespace pvt;
 
 
+// store an error message per thread, for a specific ImageInput
+static thread_local tsl::robin_map<uint64_t, std::string> output_error_messages;
+static std::atomic_int64_t output_next_id(0);
+
 
 class ImageOutput::Impl {
 public:
+    Impl()
+        : m_id(++output_next_id)
+    {
+    }
+
     // Unneeded?
     //  // So we can lock this ImageOutput for the thread-safe methods.
     //  std::recursive_mutex m_mutex;
 
-    // Thread-specific error message for this ImageOutput.
-    thread_specific_ptr<std::string> m_errormessage;
+    uint64_t m_id;
     int m_threads = 0;
 
     // The IOProxy object we will use for all I/O operations.
@@ -82,7 +90,13 @@ ImageOutput::ImageOutput()
 
 
 
-ImageOutput::~ImageOutput() {}
+ImageOutput::~ImageOutput()
+{
+    // Erase any leftover errors from this thread
+    // TODO: can we clear other threads' errors?
+    // TODO: potentially unsafe due to the static destruction order fiasco
+    // output_error_messages.erase(this);
+}
 
 
 
@@ -163,8 +177,13 @@ ImageOutput::write_tiles(int xbegin, int xend, int ybegin, int yend, int zbegin,
                     ok &= write_tile(x, y, z, format, tilestart, xstride,
                                      ystride, zstride);
                 } else {
-                    if (!buf.get())
-                        buf.reset(new char[pixelsize * m_spec.tile_pixels()]);
+                    if (!buf.get()) {
+                        const size_t sz = pixelsize * m_spec.tile_pixels();
+                        buf.reset(new char[sz]);
+                        // Not all pixels will be initialized, so we set them to zero here.
+                        // This will avoid generation of NaN, FPEs and valgrind errors.
+                        memset(buf.get(), 0, sz);
+                    }
                     OIIO::copy_image(m_spec.nchannels, xw, yh, zd, tilestart,
                                      pixelsize, xstride, ystride, zstride,
                                      &buf[0], pixelsize,
@@ -261,17 +280,13 @@ ImageOutput::append_error(string_view message) const
 {
     if (message.size() && message.back() == '\n')
         message.remove_suffix(1);
-    std::string* errptr = m_impl->m_errormessage.get();
-    if (!errptr) {
-        errptr = new std::string;
-        m_impl->m_errormessage.reset(errptr);
-    }
+    std::string& err_str = output_error_messages[m_impl->m_id];
     OIIO_DASSERT(
-        errptr->size() < 1024 * 1024 * 16
+        err_str.size() < 1024 * 1024 * 16
         && "Accumulated error messages > 16MB. Try checking return codes!");
-    if (errptr->size() && errptr->back() != '\n')
-        *errptr += '\n';
-    *errptr += std::string(message);
+    if (err_str.size() && err_str.back() != '\n')
+        err_str += '\n';
+    err_str.append(message.begin(), message.end());
 }
 
 
@@ -472,6 +487,7 @@ ImageOutput::write_image(TypeDesc format, const void* data, stride_t xstride,
                          ProgressCallback progress_callback,
                          void* progress_callback_data)
 {
+    pvt::LoggedTimer("ImageOutput::write image");
     bool native          = (format == TypeDesc::UNKNOWN);
     stride_t pixel_bytes = native ? (stride_t)m_spec.pixel_bytes(native)
                                   : format.size() * m_spec.nchannels;
@@ -694,8 +710,10 @@ ImageOutput::copy_tile_to_image_buffer(int x, int y, int z, TypeDesc format,
 bool
 ImageOutput::has_error() const
 {
-    std::string* errptr = m_impl->m_errormessage.get();
-    return (errptr && errptr->size());
+    auto iter = output_error_messages.find(m_impl->m_id);
+    if (iter == output_error_messages.end())
+        return false;
+    return iter.value().size() > 0;
 }
 
 
@@ -704,11 +722,11 @@ std::string
 ImageOutput::geterror(bool clear) const
 {
     std::string e;
-    std::string* errptr = m_impl->m_errormessage.get();
-    if (errptr) {
-        e = *errptr;
+    auto iter = output_error_messages.find(m_impl->m_id);
+    if (iter != output_error_messages.end()) {
+        e = iter.value();
         if (clear)
-            errptr->clear();
+            output_error_messages.erase(iter);
     }
     return e;
 }
@@ -1005,6 +1023,51 @@ ImageOutput::check_open(OpenMode mode, const ImageSpec& userspec, ROI range,
     }
 
     return true;  // all is ok
+}
+
+
+
+template<>
+inline size_t
+pvt::heapsize<ImageOutput::Impl>(const ImageOutput::Impl& impl)
+{
+    return impl.m_io_local ? sizeof(Filesystem::IOProxy) : 0;
+}
+
+
+
+size_t
+ImageOutput::heapsize() const
+{
+    size_t size = pvt::heapsize(m_impl);
+    size += pvt::heapsize(m_spec);
+    return size;
+}
+
+
+
+size_t
+ImageOutput::footprint() const
+{
+    return sizeof(ImageOutput) + heapsize();
+}
+
+
+
+template<>
+size_t
+pvt::heapsize<ImageOutput>(const ImageOutput& output)
+{
+    return output.heapsize();
+}
+
+
+
+template<>
+size_t
+pvt::footprint<ImageOutput>(const ImageOutput& output)
+{
+    return output.footprint();
 }
 
 

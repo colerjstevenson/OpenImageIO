@@ -148,6 +148,40 @@ namespace pvt {
 void
 set_exr_threads();
 
+
+// Split a full channel name into layer and suffix.
+void
+split_name(string_view fullname, string_view& layer, string_view& suffix)
+{
+    size_t dot = fullname.find_last_of('.');
+    if (dot == string_view::npos) {
+        suffix = fullname;
+        layer  = string_view();
+    } else {
+        layer  = string_view(fullname.data(), dot + 1);
+        suffix = string_view(fullname.data() + dot + 1,
+                             fullname.size() - dot - 1);
+    }
+}
+
+
+inline bool
+str_equal_either(string_view str, string_view a, string_view b)
+{
+    return Strutil::iequals(str, a) || Strutil::iequals(str, b);
+}
+
+
+// Do the channels appear to be R, G, B (or known common aliases)?
+bool
+channels_are_rgb(const ImageSpec& spec)
+{
+    return spec.nchannels >= 3
+           && str_equal_either(spec.channel_name(0), "R", "Red")
+           && str_equal_either(spec.channel_name(1), "G", "Green")
+           && str_equal_either(spec.channel_name(2), "B", "Blue");
+}
+
 }  // namespace pvt
 
 
@@ -357,8 +391,13 @@ OpenEXRInput::PartInfo::parse_header(OpenEXRInput* in,
 
     spec.deep = Strutil::istarts_with(header->type(), "deep");
 
-    // Unless otherwise specified, exr files are assumed to be linear.
-    spec.attribute("oiio:ColorSpace", "Linear");
+    // Unless otherwise specified, exr files are assumed to be linear Rec709
+    // if the channels appear to be R, G, B.  I know this suspect, but I'm
+    // betting that this heuristic will guess the right thing that users want
+    // more often than if we pretending we have no idea what the color space
+    // is.
+    if (pvt::channels_are_rgb(spec))
+        spec.set_colorspace("lin_rec709");
 
     if (levelmode != Imf::ONE_LEVEL)
         spec.attribute("openexr:roundingmode", roundingmode);
@@ -583,7 +622,7 @@ OpenEXRInput::PartInfo::parse_header(OpenEXRInput* in,
                 r[1] = static_cast<int>(d);
                 spec.attribute(oname, TypeRational, r);
             } else {
-                int f = static_cast<int>(gcd(int64_t(n), int64_t(d)));
+                int f = static_cast<int>(std::gcd(int64_t(n), int64_t(d)));
                 if (f > 1) {
                     int r[2];
                     r[0] = n / f;
@@ -666,7 +705,7 @@ struct ChanNameHolder {
         , xSampling(exrchan.xSampling)
         , ySampling(exrchan.ySampling)
     {
-        split_name(fullname, layer, suffix);
+        pvt::split_name(fullname, layer, suffix);
     }
 
     // Compute canoninical channel list sort priority
@@ -1024,6 +1063,9 @@ OpenEXRInput::seek_subimage(int subimage, int miplevel)
     m_miplevel = miplevel;
     m_spec     = part.spec;
 
+    if (!check_open(m_spec, { 0, 1 << 20, 0, 1 << 20, 0, 1 << 16, 0, 1 << 12 }))
+        return false;
+
     if (miplevel == 0 && part.levelmode == Imf::ONE_LEVEL) {
         return true;
     }
@@ -1140,7 +1182,8 @@ OpenEXRInput::read_native_scanlines(int subimage, int miplevel, int ybegin,
     const PartInfo& part(m_parts[m_subimage]);
     size_t pixelbytes    = m_spec.pixel_bytes(chbegin, chend, true);
     size_t scanlinebytes = (size_t)m_spec.width * pixelbytes;
-    char* buf = (char*)data - m_spec.x * pixelbytes - ybegin * scanlinebytes;
+    char* buf            = (char*)data - m_spec.x * stride_t(pixelbytes)
+                - ybegin * stride_t(scanlinebytes);
 
     try {
         if (part.luminance_chroma) {

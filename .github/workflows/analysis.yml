@@ -11,11 +11,15 @@ on:
     # Run unconditionally once weekly
     # - cron: "0 0 * * 0"
   push:
-    # Run on pushes only to master or if the branch name contains "analysis"
+    # Run on pushes only to main or if the branch name contains "analysis"
     branches:
-      - master
+      - main
       - '*analysis*'
       - '*sonar*'
+    paths-ignore:
+      - '**.md'
+      - '**.rst'
+      - 'docs/**'
   # Allow manual kicking off of the workflow from github.com
   workflow_dispatch:
   # Uncomment the following line if we want to run analysis on all PRs:
@@ -40,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - desc: sonar gcc9/C++14 py39 boost1.76 exr3.1 ocio2.2
+          - desc: sonar gcc9/C++14 py39 exr3.1 ocio2.2
             nametag: static-analysis-sonar
             os: ubuntu-latest
             container: aswf/ci-osl:2023-clang15
@@ -60,7 +64,6 @@ jobs:
                             CMAKE_UNITY_BUILD=OFF
                             CODECOV=1
                             CTEST_TEST_TIMEOUT=1200
-                            OIIO_CMAKE_FLAGS="-DOIIO_TEX_IMPLEMENT_VARYINGREF=OFF"
 
     runs-on: ${{ matrix.os }}
     container:

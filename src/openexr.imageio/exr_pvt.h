@@ -20,20 +20,11 @@
 #include <OpenEXR/ImfIO.h>
 #include <OpenEXR/ImfRgbaFile.h>
 
-#ifdef OPENEXR_VERSION_MAJOR
-#    define OPENEXR_CODED_VERSION                                    \
-        (OPENEXR_VERSION_MAJOR * 10000 + OPENEXR_VERSION_MINOR * 100 \
-         + OPENEXR_VERSION_PATCH)
-#else
-#    define OPENEXR_CODED_VERSION 20000
-#endif
+#define OPENEXR_CODED_VERSION                                    \
+    (OPENEXR_VERSION_MAJOR * 10000 + OPENEXR_VERSION_MINOR * 100 \
+     + OPENEXR_VERSION_PATCH)
 
-#if OPENEXR_CODED_VERSION >= 20400 \
-    || __has_include(<OpenEXR/ImfFloatVectorAttribute.h>)
-#    define OPENEXR_HAS_FLOATVECTOR 1
-#else
-#    define OPENEXR_HAS_FLOATVECTOR 0
-#endif
+#define OPENEXR_HAS_FLOATVECTOR 1
 
 #define ENABLE_EXR_DEBUG_PRINTS 0
 
@@ -53,39 +44,17 @@ static bool exrdebug = Strutil::stoi(Sysutil::getenv("OIIO_DEBUG_OPENEXR"))
 #endif
 
 
-
-#if OIIO_CPLUSPLUS_VERSION >= 17 || defined(__cpp_lib_gcd_lcm)
-using std::gcd;
-#else
-template<class M, class N, class T = std::common_type_t<M, N>>
-inline T
-gcd(M a, N b)
-{
-    while (b) {
-        T t = b;
-        b   = a % b;
-        a   = t;
-    }
-    return a;
-}
-#endif
-
-
+namespace pvt {
 
 // Split a full channel name into layer and suffix.
-inline void
-split_name(string_view fullname, string_view& layer, string_view& suffix)
-{
-    size_t dot = fullname.find_last_of('.');
-    if (dot == string_view::npos) {
-        suffix = fullname;
-        layer  = string_view();
-    } else {
-        layer  = string_view(fullname.data(), dot + 1);
-        suffix = string_view(fullname.data() + dot + 1,
-                             fullname.size() - dot - 1);
-    }
-}
+void
+split_name(string_view fullname, string_view& layer, string_view& suffix);
+
+// Do the channels appear to be R, G, B (or known common aliases)?
+bool
+channels_are_rgb(const ImageSpec& spec);
+
+}  // namespace pvt
 
 
 
@@ -108,21 +77,12 @@ public:
             throw Iex::IoExc("Unexpected end of file.");
         return n;
     }
-#if OIIO_USING_IMATH >= 3
     uint64_t tellg() override { return m_io->tell(); }
     void seekg(uint64_t pos) override
     {
         if (!m_io->seek(pos))
             throw Iex::IoExc("File input failed.");
     }
-#else
-    Imath::Int64 tellg() override { return m_io->tell(); }
-    void seekg(Imath::Int64 pos) override
-    {
-        if (!m_io->seek(pos))
-            throw Iex::IoExc("File input failed.");
-    }
-#endif
     void clear() override {}
 
 private:

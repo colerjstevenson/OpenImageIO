@@ -7,10 +7,10 @@ security vulnerabilities.
 
 | Version / branch  | Supported                                            |
 | ----------------- | ---------------------------------------------------- |
-| master            | :white_check_mark: :construction: ALL fixes immediately, but this is a branch under development with a frequently unstable ABI and occasionally unstable API. |
-| 2.5.x             | :white_check_mark: All fixes that can be backported without breaking ABI compatibility. New tagged releases monthly. |
-| 2.4.x             | :warning: Only receives occasional critical fixes, upon request, only if they can be easily backported. |
-| <= 2.3.x          | :x: No longer receiving patches of any kind.        |
+| main              | :white_check_mark: :construction: ALL fixes immediately, but this is a branch under development with a frequently unstable ABI and occasionally unstable API. |
+| 3.0.x             | :white_check_mark: All fixes that can be backported without breaking ABI compatibility. New tagged releases monthly. |
+| 2.5.x             | :white_check_mark: All fixes that can be backported without breaking ABI compatibility. New tagged releases monthly. But be warned that probably by mid-2025, the 2.5.x family will move to a state of only receiving critical fixes, upon request, only if they can be easily backported. |
+| <= 2.4.x          | :x: No longer receiving patches of any kind.        |
 
 
 ## Reporting a Vulnerability
@@ -34,6 +34,8 @@ None known
 
 Most recent fixes listed first, more or less
 
+- CVE-2024-40630: Fixed incorrect image size for certain HEIC files.
+  [advisory](https://github.com/AcademySoftwareFoundation/OpenImageIO/security/advisories/GHSA-jjm9-9m4m-c8p2) (Fixed in 2.5.13.1)
 - CVE-2023-42295: Fix signed integer overflow when computing total number of pixels while reading BMP files. [#3948](https://github.com/AcademySoftwareFoundation/OpenImageIO/pull/3948) (by xiaoxiaoafeifei) (Fixed in 2.5.3.0/2.6.0.1)
 - CVE-2023-36183: Heap-buffer-overflow while reading ICO files [#3872](https://github.com/AcademySoftwareFoundation/OpenImageIO/pull/3872)  (by xiaoxiaoafeifei)
 - TALOS-2023-1709 / CVE-2023-24472: Race condition in TIFF reader. [#3772](https://github.com/AcademySoftwareFoundation/OpenImageIO/pull/3772) (2.5.1.0/2.4.8.1)

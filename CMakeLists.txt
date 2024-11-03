@@ -1,10 +1,10 @@
 # Copyright Contributors to the OpenImageIO project.
-# SPDX-License-Identifier: BSD-3-Clause and Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # https://github.com/AcademySoftwareFoundation/OpenImageIO
 
-cmake_minimum_required (VERSION 3.15)
+cmake_minimum_required (VERSION 3.18.2)
 
-set (OpenImageIO_VERSION "2.6.1.3")
+set (OpenImageIO_VERSION "3.1.0.0")
 set (OpenImageIO_VERSION_OVERRIDE "" CACHE STRING
      "Version override (use with caution)!")
 mark_as_advanced (OpenImageIO_VERSION_OVERRIDE)
@@ -24,7 +24,7 @@ set (PROJECT_VERSION_RELEASE_TYPE "dev" CACHE STRING
 set (${PROJECT_NAME}_VERSION_RELEASE_TYPE ${PROJECT_VERSION_RELEASE_TYPE})
 set (PROJECT_AUTHORS "Contributors to the OpenImageIO project")
 option (${PROJECT_NAME}_SUPPORTED_RELEASE
-        "Set ON for supported release branch, OFF for master" OFF)
+        "Set ON for supported release branches, OFF for 'main'" OFF)
 if (${PROJECT_NAME}_SUPPORTED_RELEASE)
     set (${PROJECT_NAME}_DEV_RELEASE OFF)
 else ()
@@ -39,6 +39,17 @@ if (CMAKE_VERSION VERSION_LESS 3.21)
         set (PROJECT_IS_TOP_LEVEL ON)
     endif ()
 endif ()
+
+# Set up module path for our own cmake modules and add some esential ones
+list (APPEND CMAKE_MODULE_PATH
+      "${PROJECT_SOURCE_DIR}/src/cmake/modules"
+      "${PROJECT_SOURCE_DIR}/src/cmake")
+
+# Utilities
+include (colors)
+include (set_utils)
+include (check_is_enabled)
+include (fancy_add_executable)
 
 # If the user wants to use Conan to build dependencies, they will have done
 # this prior to the cmake config:
@@ -76,9 +87,11 @@ message (STATUS "Build type             = ${CMAKE_BUILD_TYPE}")
 message (STATUS "Supported release      = ${${PROJECT_NAME}_SUPPORTED_RELEASE}")
 
 # Make the build area layout look a bit more like the final dist layout
-set (CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if (PROJECT_IS_TOP_LEVEL)
+    set (CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+    set (CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+    set (CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+endif()
 
 if ("${PROJECT_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
     message (FATAL_ERROR "Not allowed to run in-source build!")
@@ -127,10 +140,6 @@ set (TEX_BATCH_SIZE "" CACHE STRING "Force TextureSystem SIMD batch size (e.g. 1
 if (TEX_BATCH_SIZE)
     add_compile_definitions (OIIO_TEXTURE_SIMD_BATCH_WIDTH=${TEX_BATCH_SIZE})
 endif ()
-option (OIIO_TEX_IMPLEMENT_VARYINGREF "Implement the deprecated batch texture functions taking VaryingRef params" ON)
-if (NOT OIIO_TEX_IMPLEMENT_VARYINGREF)
-    add_compile_definitions (OIIO_TEX_NO_IMPLEMENT_VARYINGREF=1)
-endif ()
 
 # Set the default namespace
 set (${PROJ_NAME}_NAMESPACE ${PROJECT_NAME} CACHE STRING
@@ -145,9 +154,9 @@ endif ()
 message(STATUS "Setting Namespace to: ${PROJ_NAMESPACE_V}")
 
 
-list (APPEND CMAKE_MODULE_PATH
-      "${PROJECT_SOURCE_DIR}/src/cmake/modules"
-      "${PROJECT_SOURCE_DIR}/src/cmake")
+# Define OIIO_INTERNAL symbol only when building OIIO itself, will not be
+# defined for downstream projects using OIIO.
+add_compile_definitions (OIIO_INTERNAL=1)
 
 # Define OIIO_INTERNAL symbol only when building OIIO itself, will not be
 # defined for downstream projects using OIIO.
@@ -155,21 +164,22 @@ add_compile_definitions (OIIO_INTERNAL=1)
 
 include (GNUInstallDirs)
 
-# Utilities
-include (colors)
-include (check_is_enabled)
-include (checked_find_package)
-include (fancy_add_executable)
+# Utilities for build instructions of the format-reading plugins
 include (add_oiio_plugin)
 
 # All the C++ and compiler related options and adjustments
 include (compiler)
+
+# Dependency finding utilities and all dependency-related options
+include (dependency_utils)
 
 # Utilities and options related to finding python and making python bindings
 include (pythonutils)
 
 # Dependency finding utilities and all dependency-related options
 include (externalpackages)
+
+include (cuda_macros)
 
 # Include all our testing apparatus and utils, but not if it's a subproject
 if (PROJECT_IS_TOP_LEVEL)
@@ -240,8 +250,10 @@ if (NOT EMBEDPLUGINS AND NOT BUILD_OIIOUTIL_ONLY)
     endforeach ()
 endif ()
 
-if (USE_PYTHON AND Python_Development_FOUND AND NOT BUILD_OIIOUTIL_ONLY)
+if (USE_PYTHON AND Python3_Development_FOUND AND NOT BUILD_OIIOUTIL_ONLY)
     add_subdirectory (src/python)
+else ()
+    message (STATUS "Not building Python bindings: USE_PYTHON=${USE_PYTHON}, Python3_Development_FOUND=${Python3_Development_FOUND}")
 endif ()
 
 add_subdirectory (src/include)
@@ -253,11 +265,6 @@ add_subdirectory (src/fonts)
 if (NUKE_FOUND)
     add_subdirectory (src/nuke/txReader)
     add_subdirectory (src/nuke/txWriter)
-endif ()
-
-# Last minute site-specific instructions, if they exist
-if (OIIO_SITE AND EXISTS "${PROJECT_SOURCE_DIR}/site/${OIIO_SITE}/cmake/sitecustom.cmake")
-    include ("${PROJECT_SOURCE_DIR}/site/${OIIO_SITE}/cmake/sitecustom.cmake")
 endif ()
 
 # install pkgconfig file
@@ -316,3 +323,5 @@ endif ()
 if (PROJECT_IS_TOP_LEVEL)
     include (packaging)
 endif ()
+
+print_package_notfound_report ()

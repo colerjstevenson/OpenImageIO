@@ -20,19 +20,25 @@ if [[ "$ASWF_ORG" != ""  ]] ; then
     if [[ "$ASWF_VFXPLATFORM_VERSION" == "2021" || "$ASWF_VFXPLATFORM_VERSION" == "2022" ]] ; then
         # CentOS 7 based containers need the now-nonexistant centos repo to be
         # excluded or all the subsequent yum install commands will fail.
-        yum-config-manager --disable centos-sclo-rh && true
+        yum-config-manager --disable centos-sclo-rh || true
         sed -i 's,^mirrorlist=,#,; s,^#baseurl=http://mirror\.centos\.org/centos/$releasever,baseurl=https://vault.centos.org/7.9.2009,' /etc/yum.repos.d/CentOS-Base.repo
     fi
 
-    sudo yum install -y giflib giflib-devel && true
+    sudo yum install -y giflib giflib-devel || true
     if [[ "${USE_OPENCV}" != "0" ]] ; then
-        sudo yum install -y opencv opencv-devel && true
+        sudo yum install -y opencv opencv-devel || true
     fi
     if [[ "${USE_FFMPEG}" != "0" ]] ; then
-        sudo yum install -y ffmpeg ffmpeg-devel && true
+        sudo yum install -y ffmpeg ffmpeg-devel || true
+    fi
+    if [[ "${USE_FREETYPE:-1}" != "0" ]] ; then
+        sudo yum install -y freetype freetype-devel || true
     fi
     if [[ "${EXTRA_DEP_PACKAGES}" != "" ]] ; then
-        time sudo yum install -y ${EXTRA_DEP_PACKAGES}
+        time sudo yum install -y ${EXTRA_DEP_PACKAGES} || true
+    fi
+    if [[ "${PIP_INSTALLS}" != "" ]] ; then
+        time pip3 install ${PIP_INSTALLS} || true
     fi
 
     if [[ "${CONAN_LLVM_VERSION}" != "" ]] ; then
@@ -76,23 +82,25 @@ if [[ "$ASWF_ORG" != ""  ]] ; then
 else
     # Using native Ubuntu runner
 
-    time sudo apt-get update
+    if [[ "${SKIP_APT_GET_UPDATE}" != "1" ]] ; then
+        time sudo apt-get update
+    fi
 
     time sudo apt-get -q install -y \
         git cmake ninja-build ccache g++ \
-        libboost-dev libboost-thread-dev libboost-filesystem-dev \
         libilmbase-dev libopenexr-dev \
         libtiff-dev libgif-dev libpng-dev
     if [[ "${SKIP_SYSTEM_DEPS_INSTALL}" != "1" ]] ; then
-        time sudo apt-get -q install -y \
+        time sudo apt-get -q install -y --fix-missing \
             libraw-dev libwebp-dev \
             libavcodec-dev libavformat-dev libswscale-dev libavutil-dev \
             dcmtk libopenvdb-dev \
             libfreetype6-dev \
-            locales wget \
             libopencolorio-dev \
-            libtbb-dev \
-            libopencv-dev
+            libtbb-dev || true
+    fi
+    if [[ "${USE_OPENCV}" != "0" ]] && [[ "${INSTALL_OPENCV}" != "0" ]] ; then
+        sudo apt-get -q install -y --fix-missing libopencv-dev || true
     fi
     if [[ "${QT_VERSION:-5}" == "5" ]] ; then
         time sudo apt-get -q install -y \
@@ -104,13 +112,8 @@ else
         time sudo apt-get -q install -y ${EXTRA_DEP_PACKAGES}
     fi
 
-    # Nonstandard python versions
-    if [[ "${PYTHON_VERSION}" == "3.9" ]] ; then
-        time sudo apt-get -q install -y python3.9-dev python3-numpy
-    elif [[ "$PYTHON_VERSION" == "2.7" ]] ; then
-        time sudo apt-get -q install -y python-dev python-numpy
-    fi
-    if [[ "${PIP_INSTALLS:=numpy}" != "none" ]] ; then
+    time sudo apt-get -q install -y python3-numpy
+    if [[ "${PIP_INSTALLS}" != "" ]] ; then
         time pip3 install ${PIP_INSTALLS}
     fi
 
@@ -124,31 +127,11 @@ else
 
     export CMAKE_PREFIX_PATH=/usr/lib/x86_64-linux-gnu:$CMAKE_PREFIX_PATH
 
-    if [[ "$CXX" == "g++-6" ]] ; then
-        time sudo apt-get install -y g++-6
-    elif [[ "$CXX" == "g++-7" ]] ; then
-        time sudo apt-get install -y g++-7
-    elif [[ "$CXX" == "g++-8" ]] ; then
-        time sudo apt-get install -y g++-8
-    elif [[ "$CXX" == "g++-9" ]] ; then
-        time sudo apt-get install -y g++-9
-    elif [[ "$CXX" == "g++-10" ]] ; then
-        time sudo apt-get install -y g++-10
-    elif [[ "$CXX" == "g++-11" ]] ; then
-        time sudo apt-get install -y g++-11
-    elif [[ "$CXX" == "g++-12" ]] ; then
-        time sudo apt-get install -y g++-12
-    elif [[ "$CXX" == "g++-13" ]] ; then
-        time sudo apt-get install -y g++-13
-    elif [[ "$CXX" == "g++-14" ]] ; then
-        time sudo apt-get install -y g++-14
-    fi
-
     if [[ "$CXX" == "icpc" || "$CC" == "icc" || "$USE_ICC" != "" || "$USE_ICX" != "" ]] ; then
+        time sudo apt-get -q install -y wget
         wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2023.PUB
         sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS-2023.PUB
         echo "deb https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
-        time sudo apt-get update
         time sudo apt-get install -y intel-oneapi-compiler-dpcpp-cpp-and-cpp-classic
         set +e; source /opt/intel/oneapi/setvars.sh; set -e
     fi
@@ -216,6 +199,10 @@ fi
 
 if [[ "$LIBJPEGTURBO_VERSION" != "" ]] ; then
     source src/build-scripts/build_libjpeg-turbo.bash
+fi
+
+if [[ "$FREETYPE_VERSION" != "" ]] ; then
+    source src/build-scripts/build_Freetype.bash
 fi
 
 if [[ "$USE_ICC" != "" ]] ; then

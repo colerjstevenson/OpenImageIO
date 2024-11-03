@@ -19,7 +19,6 @@
 #include <OpenImageIO/fmath.h>
 #include <OpenImageIO/imagebuf.h>
 #include <OpenImageIO/imagebufalgo.h>
-#include <OpenImageIO/span_util.h>
 #include <OpenImageIO/tiffutils.h>
 
 // #include "jpeg_memory_src.h"
@@ -383,8 +382,8 @@ private:
     static void cmyk_to_rgb(int n, cspan<T> cmyk, size_t cmyk_stride,
                             span<T> rgb, size_t rgb_stride)
     {
-        DASSERT(size_t(n) * cmyk_stride <= std::size(cmyk));
-        DASSERT(size_t(n) * rgb_stride <= std::size(rgb));
+        OIIO_DASSERT(size_t(n) * cmyk_stride <= std::size(cmyk));
+        OIIO_DASSERT(size_t(n) * rgb_stride <= std::size(rgb));
         for (int i = 0; i < n; ++i) {
             float C = convert_type<T, float>(cmyk[i * cmyk_stride + 0]);
             float M = convert_type<T, float>(cmyk[i * cmyk_stride + 1]);
@@ -808,7 +807,7 @@ PSDInput::read_native_scanline(int subimage, int miplevel, int y, int /*z*/,
             break;
         }
     } else if (m_header.color_mode == ColorMode_CMYK) {
-        oiio_span_size_type cmyklen = channel_count * spec.width;
+        span_size_t cmyklen = channel_count * spec.width;
         switch (bps) {
         case 4: {
             std::unique_ptr<float[]> cmyk(new float[cmyklen]);
@@ -842,11 +841,13 @@ PSDInput::read_native_scanline(int subimage, int miplevel, int y, int /*z*/,
         }
         }
     } else if (m_header.color_mode == ColorMode_Indexed) {
-        if (!indexed_to_rgb({ (unsigned char*)dst, spec.width * spec.nchannels },
+        if (!indexed_to_rgb({ (unsigned char*)dst,
+                              span_size_t(spec.width * spec.nchannels) },
                             channel_buffers[0], spec.width))
             return false;
     } else if (m_header.color_mode == ColorMode_Bitmap) {
-        if (!bitmap_to_rgb({ (unsigned char*)dst, spec.width * spec.nchannels },
+        if (!bitmap_to_rgb({ (unsigned char*)dst,
+                             span_size_t(spec.width * spec.nchannels) },
                            channel_buffers[0], spec.width))
             return false;
     } else {
