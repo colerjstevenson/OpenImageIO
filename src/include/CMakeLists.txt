@@ -49,6 +49,17 @@ install (FILES ${detail_headers}
          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/detail
          COMPONENT developer)
 
+file (GLOB flip_headers OpenImageIO/FLIP/*.h)
+install (FILES ${flip_headers}
+         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/flip
+         COMPONENT developer)
+
+
+file (GLOB flip_headers OpenImageIO/FLIP/tools/*.h)
+install (FILES ${flip_headers}
+         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/flip/tools
+         COMPONENT developer)
+
 if (OIIO_INTERNALIZE_FMT OR fmt_LOCAL_BUILD)
     set (fmt_headers_base_names)
     foreach (header_name core.h format-inl.h format.h ostream.h printf.h

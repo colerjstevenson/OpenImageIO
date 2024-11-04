@@ -1410,7 +1410,7 @@ CompareResults OIIO_API compare (const ImageBuf &A, const ImageBuf &B,
                                  ROI roi={}, int nthreads=0);
 
 //compare two images usinf the nvidia flip arlgorithm
-CompareResults OIIO_API compare_flip (const ImageBuf &A, const ImageBuf &Bcd);
+CompareResults OIIO_API compare_flip (const std::string& ref, const std::string& test);
 
 
 /// Compare two images using Hector Yee's perceptual metric, returning
